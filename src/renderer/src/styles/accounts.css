@@ -1,0 +1,99 @@
+/* Claude accounts: top-bar switcher chip, gear-menu section, rate-limit "Continue with" buttons. */
+.account-dd .dd-trigger {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  gap: 5px;
+}
+.account-dd .dd-trigger:hover,
+.account-dd .dd-trigger.open {
+  border-color: var(--accent-muted);
+  color: var(--text);
+}
+.account-dd .dd-label {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-pair .account-dd {
+  margin-right: 4px;
+}
+
+.accounts-section {
+  padding: 8px 0 4px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin: 6px 0;
+}
+.accounts-title {
+  font-size: 12px;
+  color: var(--text-3, var(--text-2));
+  padding: 0 2px 4px;
+}
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-2);
+}
+.account-row:hover {
+  background: var(--border);
+}
+.account-row.active .account-name {
+  color: var(--text);
+}
+.account-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.account-name,
+.account-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-active {
+  flex: none;
+}
+.account-x {
+  opacity: 0;
+}
+.account-row:hover .account-x,
+.account-x:focus-visible {
+  opacity: 0.7;
+}
+.account-x:hover {
+  opacity: 1;
+}
+.account-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 2px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.account-add:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.error-box .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

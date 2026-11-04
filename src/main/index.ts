@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, dialog, shell, nativeTheme, nativeImage, Notification } from 'electron'
+import { app, BrowserWindow, Menu, dialog, shell, nativeTheme, nativeImage, Notification, powerSaveBlocker } from 'electron'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -21,16 +21,18 @@ import { RemoteManager } from './remote'
 import { MobileServer } from './mobile'
 import { PtyManager } from './pty'
 import { checkUpdate } from './updates'
-import { authStatus } from './auth'
+import { authStatus, refreshAccountInfo } from './auth'
+import { accountConfigDir, activeAccount, addAccount, DEFAULT_ACCOUNT, ensureAccountDir, listAccounts, onAccountsChanged, removeAccount, resolveAccount, setActiveAccount } from './accounts'
 import { claudeBinary } from './claudeBin'
 import { CHATS_DIR } from './paths'
 import { setupTray, focusWindow } from './tray'
+import { listSkills } from './skills'
 import { workflowList, workflowRead, workflowSave, workflowDelete, workflowAgents } from './workflows'
 import { resourceFile } from './resources'
 import { migrateLegacyData } from './migrate'
 import { loadLoginShellEnv } from './shellEnv'
 import type { WorkflowSaveRequest } from '../shared/workflow'
-import type { StartChatOptions, PermissionResponse, PermissionMode, CodexMode, Engine, SessionMeta, UserContent, NotifyRequest, Theme, RemoteEnableInfo } from '../shared/types'
+import type { StartChatOptions, StartChatResult, PermissionResponse, PermissionMode, CodexMode, Engine, SessionMeta, UserContent, NotifyRequest, Theme, RemoteEnableInfo } from '../shared/types'
 
 // Keep the profile in <appData>/hearth (see migrate.ts for the move from agent-command-center): the packaged productName ("Hearth") must not
 // move it (on Linux this is the same path as before). An explicit --user-data-dir (test copies) wins.
@@ -183,7 +185,10 @@ handle('sessions:deleteProject', async (_ctx, cwd: string, sessionIds: string[])
 
 // ---- IPC: chat -----------------------------------------------------------
 
-handle('chat:start', (ctx, opts: StartChatOptions) => runners.start(opts, ctx.client))
+handle('chat:start', (ctx, opts: StartChatOptions): StartChatResult => {
+  const gen = runners.start(opts, ctx.client)
+  return { gen, account: runners.getClaude(opts.chatId)?.account }
+})
 handle('chat:attach', (ctx, chatId: string) => runners.attach(chatId, ctx.client))
 handle('chat:live', () => runners.list())
 handle('chat:send', (ctx, chatId: string, content: UserContent, uuid: string) => {
@@ -211,6 +216,7 @@ handle('chat:setPermissionMode', (_ctx, chatId: string, mode: PermissionMode | C
 handle('chat:close', (ctx, chatId: string) => runners.release(chatId, ctx.client))
 handle('chat:models', (_ctx, chatId: string) => runners.get(chatId)?.listModels() ?? [])
 handle('app:models', () => listAllModels(runners, log))
+handle('skills:list', (_ctx, cwd: string) => listSkills(cwd))
 handle('workflow:list', (_ctx, root: string) => workflowList(root))
 handle('workflow:read', (_ctx, path: string) => workflowRead(path))
 handle('workflow:save', (_ctx, req: WorkflowSaveRequest) => workflowSave(req))
@@ -319,7 +325,20 @@ handle('app:openInEditor', (_ctx, path: string, line?: number, editorId?: string
 handle('app:openTerminal', (_ctx, dir: string, terminalId?: string) => openTerminal(dir, terminalId))
 // ---- IPC: updates and Claude login
 handle('app:checkUpdate', () => checkUpdate())
-handle('auth:status', () => authStatus())
+handle('auth:status', (_ctx, account?: string) => authStatus(account))
+// ---- IPC: Claude accounts (accounts.ts)
+handle('accounts:list', () => listAccounts())
+handle('accounts:setActive', (_ctx, id: string) => setActiveAccount(id))
+handle('accounts:add', () => ({ id: addAccount() }))
+handle('accounts:remove', (_ctx, id: string) => removeAccount(id))
+onAccountsChanged(() => emit('accounts:changed', listAccounts()))
+// Only a switch of the active account moves the plan-usage meter (info refreshes do not).
+let lastActive = activeAccount()
+onAccountsChanged(() => {
+  if (activeAccount() === lastActive) return
+  lastActive = activeAccount()
+  usageService?.activeChanged()
+})
 // ---- IPC: Codex engine (docs/codex.md)
 handle('codex:status', () => codexAccount.status())
 handle('codex:login', () => {
@@ -330,10 +349,13 @@ handle('codex:login', () => {
 handle('codex:usage', () => codexAccount.usage())
 handle('codex:models', () => codexAccount.models())
 handle('codex:hasAgentsMd', (_ctx, cwd: string) => hasAgentsMd(cwd))
-handle('auth:login', () => {
+handle('auth:login', (_ctx, account?: string) => {
   const bin = claudeBinary()
   if (!bin) return { error: 'Claude CLI not found' }
-  return { id: ptys.create(homedir(), 80, 12, { command: bin, args: ['auth', 'login'], kind: 'login' }) }
+  const id = resolveAccount(account)
+  ensureAccountDir(id)
+  const env = id === DEFAULT_ACCOUNT ? undefined : { CLAUDE_CONFIG_DIR: accountConfigDir(id) }
+  return { id: ptys.create(homedir(), 80, 12, { command: bin, args: ['auth', 'login'], kind: 'login', ...(env ? { env } : {}) }) }
 })
 // ---- IPC: integrated terminal
 handle('pty:create', (_ctx, cwd: string, cols: number, rows: number) => ptys.create(cwd, cols, rows))
@@ -346,6 +368,17 @@ handle('pty:idle', (_ctx, id: string) => ptys.isIdle(id))
 handle('shell:openPath', (_ctx, p: string) => shell.openPath(p))
 handle('app:home', () => homedir())
 handle('app:chatsDir', () => CHATS_DIR)
+let keepAwakeId: number | null = null
+on('app:keepAwake', (_ctx, on: boolean) => {
+  if (on && keepAwakeId === null) {
+    keepAwakeId = powerSaveBlocker.start('prevent-display-sleep')
+    console.log('keep-awake: on')
+  } else if (!on && keepAwakeId !== null) {
+    powerSaveBlocker.stop(keepAwakeId)
+    keepAwakeId = null
+    console.log('keep-awake: off')
+  }
+})
 on('app:theme', (_ctx, theme: Theme) => {
   nativeTheme.themeSource = theme
   win?.setBackgroundColor(windowBg())
@@ -477,6 +510,7 @@ if (!process.env.ELECTRON_RENDERER_URL && !app.requestSingleInstanceLock()) {
     watchCodexSessions()
     startCodexUsageTimer()
     usageService?.start()
+    void refreshAccountInfo()
     void mobileServer?.start()
     app.on('activate', () => {
       if (process.platform === 'darwin' && win && !win.isDestroyed()) void focusWindow(win)

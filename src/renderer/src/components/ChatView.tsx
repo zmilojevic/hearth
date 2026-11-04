@@ -7,6 +7,16 @@ import { AlertTriangle, Bot, Info } from 'lucide-react'
 import { subagentLine } from './ToolCard'
 import { useNow } from '../hooks'
 import { CodexLoginCard } from './CodexCards'
+import { accountLabel, loggedInAccounts } from '../accounts'
+
+/** A plan/usage limit hit (assistant `error` field or a result error text). */
+const RATE_LIMIT = /hit your (usage )?limit|usage limit|rate.?limit/i
+
+function focusComposerSoon(tries = 40): void {
+  const ta = document.querySelector<HTMLTextAreaElement>('.composer textarea')
+  if (ta) ta.focus()
+  else if (tries > 0) setTimeout(() => focusComposerSoon(tries - 1), 16)
+}
 
 function SubagentsLive({ chatId, busy }: { chatId: string; busy: boolean }) {
   const all = useStore((s) => s.chats[chatId]?.subagents)
@@ -53,6 +63,7 @@ export default function ChatView({ chatId }: { chatId: string }) {
     const c = s.chats[chatId]
     return c?.engine === 'codex' && !!c.error && /already has an active writer/i.test(c.error)
   })
+  const accounts = useStore((s) => s.accounts)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
 
@@ -125,13 +136,28 @@ export default function ChatView({ chatId }: { chatId: string }) {
             {chat.error === 'authentication_failed' && !isPhone ? (
               <>
                 <span>Claude Code isn't logged in, or the login expired.</span>
-                <button className="btn" onClick={() => useStore.getState().openLogin()}>
+                <button className="btn" onClick={() => useStore.getState().openLogin('claude', chat.account)}>
                   Log in
                 </button>
               </>
             ) : (
               <span>{chat.error}</span>
             )}
+            {chat.engine !== 'codex' && !isPhone && RATE_LIMIT.test(chat.error) &&
+              loggedInAccounts(accounts)
+                .filter((a) => a.id !== (chat.account ?? accounts.active))
+                .map((a) => (
+                  <button
+                    key={a.id}
+                    className="btn"
+                    onClick={() => {
+                      void useStore.getState().continueWithAccount(chatId, a.id)
+                      focusComposerSoon()
+                    }}
+                  >
+                    Continue with {accountLabel(a)}
+                  </button>
+                ))}
           </div>
         )}
         {chat.closed && !writerBusy && (

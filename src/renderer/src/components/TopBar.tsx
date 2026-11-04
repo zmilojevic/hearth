@@ -4,6 +4,7 @@ import { projectName, shortPath, worktreeOf, modLabel, isPhone } from '../util'
 import { useEffect, useState } from 'react'
 import ContextMeter from './ContextMeter'
 import UsageMeter from './UsageMeter'
+import AccountSwitcher from './AccountSwitcher'
 import SettingsPopover from './SettingsPopover'
 import McpPopover from './McpPopover'
 import { openFolderInEditor } from '../openIn'
@@ -93,6 +94,7 @@ export default function TopBar() {
     <header className="topbar drag">
       <div className="no-drag usage-pair" style={{ marginLeft: 8 }}>
         {historyBtn}
+        <AccountSwitcher />
         <UsageMeter label={showCodexUsage} />
         {showCodexUsage && <UsageMeter codex label />}
       </div>

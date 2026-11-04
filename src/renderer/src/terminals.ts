@@ -143,7 +143,7 @@ export function ensureTerminal(id: string, exitedCode?: number): Entry {
       }
       return false
     }
-    if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && (k === '`' || ev.code === 'Backquote')) return false // app toggle (window listener)
+    if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && (k === '`' || ev.code === 'Backquote' || ev.code === 'KeyT')) return false // app toggle, Ctrl+` / Ctrl+T (window listener)
     if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && !ev.altKey && k.toLowerCase() === 'g') return false // app: changes panel
     if (isMac && ev.metaKey && (k === 'Tab' || k === '`' || ev.code === 'Backquote')) return false // OS-level, let it through
     if (ev.ctrlKey && k === 'Tab') return false // app: next/previous chat (plain Tab goes to the shell)
@@ -249,7 +249,7 @@ export function focusTerminal(id: string): boolean {
   const e = entries.get(id)
   if (!e?.opened || !e.term.element?.isConnected) return false
   e.term.focus()
-  return true
+  return !!e.term.element.contains(document.activeElement)
 }
 
 export function disposeTerminal(id: string): void {

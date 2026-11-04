@@ -815,16 +815,15 @@ kbd {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
 }
 .chat-col {
   /* column sits --chat-shift left of centre; clamps to the left edge when narrow.
-     Content is 1022px = composer width minus 10px (5px inset each side); the right
-     padding is 10px smaller because the stable scrollbar gutter takes 10px. */
+     Content is 1022px = composer width minus 10px (5px inset each side); symmetric padding. */
   max-width: 1070px;
   margin-left: max(0px, calc((100% - 1070px) / 2 - var(--chat-shift)));
   margin-right: auto;
-  padding: 28px 19px 12px 29px;
+  padding: 28px 29px 12px 29px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -2484,6 +2483,7 @@ pre.diff {
   min-width: 0;
 }
 .chat-pane {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;

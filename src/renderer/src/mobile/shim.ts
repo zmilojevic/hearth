@@ -221,6 +221,7 @@ export function installDesktop(platform: string): void {
     appTools: () => Promise.resolve({ editors: [], terminals: [] }),
     window: () => {},
     setTheme: () => {},
+    setKeepAwake: () => {},
     checkUpdate: () => Promise.reject(new Error(unavailable)),
     authStatus: () => Promise.resolve({ state: 'unknown' }),
     authLogin: () => Promise.resolve({ error: unavailable }),

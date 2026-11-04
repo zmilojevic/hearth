@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import type { RemoteStateEvent, SessionSummary, LiveChat, PermissionRequest, PermissionMode, ModelChoice, EffortLevel, Engine, CodexMode, CodexStatus, PlanUsage, StartChatOptions, SessionMeta, ChatContext, SlashCommandInfo, AgentChoice, ContentBlock, UserContent, Theme, GitChanges, UpdateInfo } from '@shared/types'
+import type { RemoteStateEvent, SessionSummary, LiveChat, PermissionRequest, PermissionMode, ModelChoice, EffortLevel, Engine, CodexMode, CodexStatus, PlanUsage, StartChatOptions, SessionMeta, ChatContext, SlashCommandInfo, AgentChoice, ContentBlock, UserContent, Theme, GitChanges, UpdateInfo, AccountsState, AuthStatus } from '@shared/types'
 import { applySdkMessage, applyTranscript, emptyModel, restoreLive, restoreBackgroundAgents, restoreFinishedAgents, findTool, type ChatModel, type Block } from './reduce'
 import type { WfGraph, WorkflowFile, WorkflowReadResult, WorkflowScope } from '../../shared/workflow'
 import type { ImageAttachment } from './images'
@@ -80,6 +80,8 @@ export interface Chat extends ChatModel {
   engine: Engine
   /** Codex chats only: permission preset (the Claude `requestedMode` is unused for them). */
   codexMode?: CodexMode
+  /** Claude account the chat's runner was started with (see accounts.ts); unknown until the runner answered. */
+  account?: string
 }
 
 function chatExtras(engine: Engine = 'claude', codexMode?: CodexMode): Pick<Chat, 'commands' | 'agents' | 'attachments' | 'queue' | 'comments' | 'engine' | 'codexMode'> {
@@ -150,6 +152,7 @@ interface State {
   lastCwd: string
   notifications: boolean
   notifySound: boolean
+  skillsCorner: SkillsCornerMode
   /** Desktop only: look for a newer Hearth release (never installs). */
   updateCheck: boolean
   dismissedUpdate: string
@@ -158,6 +161,17 @@ interface State {
   auth: 'unknown' | 'in' | 'out'
   loginOpen: boolean
   loginProvider: 'claude' | 'codex'
+  /** Claude account the login dialog logs in (undefined = the active one). */
+  loginAccount?: string
+  /** A just-added account whose login has not succeeded yet; removed again when the dialog closes without it. */
+  loginPending: string | null
+  /** Claude accounts (accounts.ts); `active` is global, running chats keep the account they started with. */
+  accounts: AccountsState
+  setActiveAccount(id: string): Promise<void>
+  addAccount(): Promise<void>
+  removeAccount(id: string): Promise<void>
+  /** Rate-limit offer: make `account` the active one and restart this chat's runner on the same session with it. */
+  continueWithAccount(chatId: string, account: string): Promise<void>
   usageHistoryOpen: boolean
   theme: Theme
   diffTint: DiffTint
@@ -203,9 +217,11 @@ interface State {
   setUpdateCheck(v: boolean): void
   dismissUpdate(): void
   checkUpdate(): Promise<void>
-  checkAuth(): Promise<void>
-  openLogin(provider?: 'claude' | 'codex'): void
-  closeLogin(): void
+  /** Checks the login of an account (default: the active one); resolves with its state. */
+  checkAuth(account?: string): Promise<AuthStatus['state'] | null>
+  openLogin(provider?: 'claude' | 'codex', account?: string): void
+  /** `ok` = the login succeeded (a pending new account is kept, else it is removed). */
+  closeLogin(ok?: boolean): void
   openUsageHistory(): void
   closeUsageHistory(): void
   newTerminal(cwd: string): Promise<void>
@@ -226,6 +242,7 @@ interface State {
   removeAttachment(chatId: string, id: string): void
   setNotifications(v: boolean): void
   setNotifySound(v: boolean): void
+  setSkillsCorner(v: SkillsCornerMode): void
   setTheme(theme: Theme): void
   setDiffTint(v: DiffTint): void
   setFindOpen(v: boolean): void
@@ -330,9 +347,31 @@ function placeAfterPinned(s: { pinnedProjects: string[]; projectOrder: string[] 
   prefs.set('projectOrder', order)
 }
 
+let lastKeepAwake: boolean | undefined
+/** Keeps the PC awake while a chat's cache is being kept warm (an idle/sleeping PC would let the cache expire). */
+function syncKeepAwake(): void {
+  if (isPhone) return
+  const st = useStore.getState()
+  const now = Date.now()
+  const wanted = Object.values(st.chats).some((chat) => {
+    const sid = chat.sessionId
+    if (chat.closed || !sid || chat.engine === 'codex' || !st.keepWarm.includes(sid)) return false
+    const lastReal = chat.lastResponseAt || st.meta[sid]?.lastAt
+    if (!lastReal || now - lastReal > KEEP_WARM_MAX_IDLE_MS) return false
+    if (chat.status === 'running' || chat.status === 'compacting' || st.warming[sid]) return true
+    const ttl = st.meta[sid]?.cacheTtlMs ?? 300_000
+    return Math.max(lastReal, st.warmedAt[sid] ?? 0) + ttl > now
+  })
+  if (wanted === lastKeepAwake) return
+  lastKeepAwake = wanted
+  window.desktop.setKeepAwake(wanted)
+}
+
 function titleFor(s: SessionSummary): string {
   return s.customTitle || s.summary || s.firstPrompt || 'Untitled session'
 }
+
+export type SkillsCornerMode = 'shown' | 'hidden'
 
 /** True for the folder of the general chats (identity of a general chat is purely its cwd). */
 export function isGeneral(cwd?: string): boolean {
@@ -454,12 +493,16 @@ export const useStore = create<State>()(
     lastCwd: prefs.get('lastCwd', ''),
     notifications: prefs.get('notifications', true),
     notifySound: prefs.get('notifySound', true),
+    skillsCorner: (prefs.get<string>('skillsCorner', 'shown') === 'hidden' ? 'hidden' : 'shown') as SkillsCornerMode,
     updateCheck: prefs.get('updateCheck', true),
     dismissedUpdate: prefs.get('dismissedUpdate', ''),
     update: null,
     auth: 'unknown',
     loginOpen: false,
     loginProvider: 'claude' as const,
+    loginAccount: undefined,
+    loginPending: null,
+    accounts: { active: 'default', accounts: [{ id: 'default' }] },
     usageHistoryOpen: false,
     theme: prefs.get<Theme>('theme', 'system'),
     diffTint: prefs.get<DiffTint>('diffTint', 'row'),
@@ -922,6 +965,7 @@ export const useStore = create<State>()(
         else if (!on && has) s.keepWarm = s.keepWarm.filter((id) => id !== sessionId)
         prefs.set('keepWarm', s.keepWarm)
       })
+      syncKeepAwake()
     },
 
     setRemote(sessionId, on) {
@@ -938,6 +982,7 @@ export const useStore = create<State>()(
     },
 
     async tickKeepWarm() {
+      syncKeepAwake()
       const st = get()
       for (const chat of Object.values(st.chats)) {
         const sid = chat.sessionId
@@ -978,6 +1023,13 @@ export const useStore = create<State>()(
       })
     },
 
+    setSkillsCorner(v) {
+      prefs.set('skillsCorner', v)
+      set((s) => {
+        s.skillsCorner = v
+      })
+    },
+
     setNotifySound(v) {
       prefs.set('notifySound', v)
       set((s) => {
@@ -1008,22 +1060,72 @@ export const useStore = create<State>()(
       if (info) set((s) => void (s.update = info))
     },
 
-    async checkAuth() {
-      if (isPhone) return
-      const st = await window.desktop.authStatus().catch(() => null)
-      if (st) set((s) => void (s.auth = st.state))
+    async checkAuth(account) {
+      if (isPhone) return null
+      const st = await window.desktop.authStatus(account).catch(() => null)
+      // `auth` describes the active account only.
+      if (st && (!account || account === get().accounts.active)) set((s) => void (s.auth = st.state))
+      return st?.state ?? null
     },
 
-    openLogin(provider = 'claude') {
+    openLogin(provider = 'claude', account) {
       if (isPhone) return
       set((s) => {
         s.loginProvider = provider
+        s.loginAccount = provider === 'claude' ? account : undefined
         s.loginOpen = true
       })
     },
 
-    closeLogin() {
-      set((s) => void (s.loginOpen = false))
+    closeLogin(ok = false) {
+      const pending = get().loginPending
+      set((s) => {
+        s.loginOpen = false
+        s.loginPending = null
+      })
+      if (pending && !ok) void window.desktop.accountsRemove(pending)
+    },
+
+    async setActiveAccount(id) {
+      if (isPhone || id === get().accounts.active) return
+      await window.desktop.accountsSetActive(id)
+    },
+
+    async addAccount() {
+      if (isPhone) return
+      const { id } = await window.desktop.accountsAdd()
+      set((s) => {
+        s.loginPending = id
+      })
+      get().openLogin('claude', id)
+    },
+
+    async removeAccount(id) {
+      if (isPhone || id === 'default') return
+      await window.desktop.accountsRemove(id)
+    },
+
+    async continueWithAccount(chatId, account) {
+      const before = get().chats[chatId]
+      if (isPhone || !before || before.engine === 'codex') return
+      await window.desktop.accountsSetActive(account)
+      set((s) => {
+        const c = s.chats[chatId]
+        if (!c) return
+        c.closed = false
+        c.status = 'starting'
+        c.totalCost = 0 // cost counter restarts with the new CLI process
+        c.error = undefined
+        c.pending = []
+      })
+      const opts: StartChatOptions = { chatId, cwd: before.cwd, permissionMode: before.requestedMode, account }
+      // The restarted runner resumes the same session (a chat that never got a turn has no transcript to resume).
+      if (before.sessionId && before.messages.length) opts.resume = before.sessionId
+      if (before.requestedModel && before.requestedModel !== 'default') opts.model = before.requestedModel
+      if (before.requestedEffort && before.requestedEffort !== 'default') opts.effort = before.requestedEffort as EffortLevel
+      await startRunner(chatId, opts)
+      if (get().chats[chatId]?.closed) return
+      refreshAfterStart(chatId)
     },
 
     openUsageHistory() {
@@ -1262,7 +1364,7 @@ export const useStore = create<State>()(
       }
       if (!pasteToTerminal(id, text, run)) return
       const target = id
-      for (let n = 0; n < 15; n++) {
+      for (let n = 0; n < 60; n++) {
         await new Promise((r) => requestAnimationFrame(r))
         if (focusTerminal(target)) break
       }
@@ -1499,6 +1601,7 @@ async function attachLive(chatId: string, o: { background: boolean; title?: stri
       draft: '',
       unread: false,
       ...chatExtras(engine, res.codexMode),
+      ...(res.account ? { account: res.account } : {}),
     }
     s.tabs.push(chatId)
     if (o.background) s.recent = [...s.recent.filter((x) => x !== chatId), chatId]
@@ -1581,6 +1684,7 @@ async function reattachAll(): Promise<void> {
       c.pending = res!.pending
       if (res!.model) c.requestedModel = res!.model
       c.requestedMode = res!.permissionMode
+      if (res!.account) c.account = res!.account
       c.permissionMode = res!.permissionMode
       if (sessionId) c.sessionId = sessionId
       if (entries) {
@@ -1605,11 +1709,12 @@ async function reattachAll(): Promise<void> {
  * as the process is up.
  */
 async function startRunner(chatId: string, opts: StartChatOptions): Promise<void> {
-  const gen = await window.desktop.startChat(opts)
+  const res = await window.desktop.startChat(opts)
   useStore.setState((s) => {
     const c = s.chats[chatId]
     if (!c) return
-    if (typeof gen === 'number') c.gen = Math.max(c.gen ?? 0, gen)
+    if (typeof res?.gen === 'number') c.gen = Math.max(c.gen ?? 0, res.gen)
+    if (res?.account) c.account = res.account
     if (!c.closed && c.status === 'starting') c.status = 'idle'
   })
   const c = useStore.getState().chats[chatId]
@@ -1822,6 +1927,15 @@ export function wireEvents(): void {
   // Live runners (also those this client has not opened) drive the sidebar dots.
   void window.desktop.liveChats().then((l) => useStore.getState().setLive(l)).catch(() => {})
   window.desktop.onLiveChanged((l) => useStore.getState().setLive(l))
+  if (!isPhone) {
+    const applyAccounts = (a: AccountsState): void => {
+      const switched = a.active !== useStore.getState().accounts.active
+      useStore.setState({ accounts: a })
+      if (switched) void useStore.getState().checkAuth()
+    }
+    void window.desktop.accountsList().then((a) => useStore.setState({ accounts: a })).catch(() => {})
+    window.desktop.onAccountsChanged(applyAccounts)
+  }
   window.desktop.onSharedPrefChanged(({ key, value }) => {
     if (SHARED_PREFS.includes(key)) applyShared(key, value)
   })
@@ -1887,7 +2001,7 @@ export function wireEvents(): void {
           prefs.set('sessionSortTime', s.sessionSortTime)
         }
         if (message.type === 'result' && c.error && CODEX_AUTH_ERROR.test(c.error) && s.codexStatus) s.codexStatus.loggedIn = false
-      } else if (c.error === 'authentication_failed' && !isPhone) s.auth = 'out'
+      } else if (c.error === 'authentication_failed' && !isPhone && (!c.account || c.account === s.accounts.active)) s.auth = 'out'
       if (message.type === 'result' && (s.activeChatId !== chatId || !document.hasFocus())) c.unread = true
       if (message.type === 'system' && message.subtype === 'commands_changed' && Array.isArray(message.commands)) {
         c.commands = message.commands.map((x: SlashCommandInfo) => ({ name: x.name, description: x.description, argumentHint: x.argumentHint, aliases: x.aliases }))

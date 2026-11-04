@@ -16,7 +16,7 @@ export default function ToolStrip() {
       >
         <FileDiff size={18} />
       </button>
-      <button className={`tool-btn ${terminalOpen ? 'on' : ''}`} title="Terminal (Ctrl+`)" onClick={toggleTerminal}>
+      <button className={`tool-btn ${terminalOpen ? 'on' : ''}`} title="Terminal (Ctrl+T)" onClick={toggleTerminal}>
         <SquareTerminal size={18} />
       </button>
     </nav>

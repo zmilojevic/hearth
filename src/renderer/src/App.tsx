@@ -4,6 +4,7 @@ import { useStore, wireEvents, isGeneral, syncSharedPrefs } from './store'
 import Sidebar from './components/Sidebar'
 import TopBar from './components/TopBar'
 import ChatView from './components/ChatView'
+import SkillsCorner from './components/SkillsCorner'
 import Composer from './components/Composer'
 import AgentView, { ReadOnlyComposer } from './components/AgentView'
 import NewSessionDialog from './components/NewSessionDialog'
@@ -69,6 +70,7 @@ export default function App() {
   const agentView = useStore((s) => s.agentView)
   const loginOpen = useStore((s) => s.loginOpen)
   const loginProvider = useStore((s) => s.loginProvider)
+  const loginAccount = useStore((s) => s.loginAccount)
   const usageHistoryOpen = useStore((s) => s.usageHistoryOpen)
   const [agentModel, setAgentModel] = useState<string | undefined>()
 
@@ -133,11 +135,14 @@ export default function App() {
     }
     const onKey = (e: KeyboardEvent): void => {
       const mod = e.ctrlKey || e.metaKey
-      const isToggleTerm = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.code === 'Backquote'
+      const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey
+      const inTermPanel = !!(e.target as Element | null)?.closest?.('.term-panel')
+      // Ctrl+T is a full alias of Ctrl+` (also inside the terminal; the shell never sees it)
+      const isToggleTerm = plainCtrl && (e.code === 'Backquote' || e.code === 'KeyT')
       const isChangesKey = mod && e.shiftKey && e.key.toLowerCase() === 'g'
       // Keys typed into the terminal belong to the shell; only these app hotkeys still work there
       // (Tab / Shift+Tab and Ctrl+Tab / Ctrl+Shift+Tab are handled by the Sidebar's window listeners).
-      if (!isToggleTerm && !isChangesKey && (e.target as Element | null)?.closest?.('.term-panel')) return
+      if (!isToggleTerm && !isChangesKey && inTermPanel) return
       if (isToggleTerm) {
         e.preventDefault()
         const st = useStore.getState()
@@ -154,6 +159,7 @@ export default function App() {
       } else if (mod && e.key.toLowerCase() === 'n') {
         e.preventDefault()
         void newGeneralChat()
+        requestAnimationFrame(() => focusComposer())
       } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'q') {
         e.preventDefault()
         window.desktop.window('quit')
@@ -309,6 +315,9 @@ export default function App() {
               ]}
             />
           )}
+          {!workflowsRoot && !isPhone && activeChatId && !generalActive && !(agentView && agentView.chatId === activeChatId) && (
+            <SkillsCorner chatId={activeChatId} />
+          )}
           {!workflowsRoot && !isPhone && activeChatId && !generalActive && (
             <ErrorBoundary name="ToolStrip" key={`toolstrip-${activeChatId}`}>
               <ToolStrip />
@@ -317,7 +326,7 @@ export default function App() {
         </div>
       </main>
       {showNewDialog && <NewSessionDialog />}
-      {loginOpen && !isPhone && <LoginDialog provider={loginProvider} />}
+      {loginOpen && !isPhone && <LoginDialog provider={loginProvider} account={loginAccount} />}
       {usageHistoryOpen && <UsageHistoryDialog />}
       {isPhone && <ReconnectPill />}
     </div>

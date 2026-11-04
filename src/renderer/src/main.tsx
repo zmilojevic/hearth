@@ -20,6 +20,8 @@ import './styles/agent-view.css'
 import './styles/updates-auth.css'
 import './styles/usage-history.css'
 import './styles/codex.css'
+import './styles/skills.css'
+import './styles/accounts.css'
 
 document.documentElement.dataset.platform = window.desktop.platform
 document.documentElement.dataset.client = window.desktop.client

@@ -142,6 +142,29 @@ export interface StartChatOptions {
   engine?: Engine
   /** Codex chats only (`permissionMode` is ignored for them). */
   codexMode?: CodexMode
+  /** Claude account id (see accounts.ts); defaults to the active account. Running chats keep the one they started with. */
+  account?: string
+}
+
+/** What `chat:start` resolves with. */
+export interface StartChatResult {
+  gen: number
+  /** The Claude account the runner uses (absent for Codex). */
+  account?: string
+}
+
+export interface AccountInfo {
+  /** `default` or `acc-<8 hex>`. */
+  id: string
+  label?: string
+  email?: string
+  org?: string
+  plan?: string
+}
+
+export interface AccountsState {
+  active: string
+  accounts: AccountInfo[]
 }
 
 export interface PermissionRequest {
@@ -295,6 +318,8 @@ export interface LiveChat {
   holders: number
   engine?: Engine
   codexMode?: CodexMode
+  /** Claude account the runner was started with. */
+  account?: string
 }
 
 export interface AttachResult extends LiveChat {
@@ -334,7 +359,7 @@ export interface DesktopApi {
   /** Delete every listed transcript of a project; its folder under ~/.claude/projects goes too once empty. */
   deleteProject(cwd: string, sessionIds: string[]): Promise<void>
   /** Resolves with the new runner's generation; events of older runners carry smaller ones. */
-  startChat(opts: StartChatOptions): Promise<number>
+  startChat(opts: StartChatOptions): Promise<StartChatResult>
   send(chatId: string, content: UserContent, uuid: string): Promise<void>
   respond(chatId: string, requestId: string, response: PermissionResponse): Promise<void>
   interrupt(chatId: string): Promise<void>
@@ -354,6 +379,7 @@ export interface DesktopApi {
   listCommands(chatId: string): Promise<SlashCommandInfo[]>
   /** Saved workflows of a project root (`<root>/.claude/workflows`) and the user dir. */
   workflowList(root: string): Promise<WorkflowFile[]>
+  listSkills(cwd: string): Promise<SkillInfo[]>
   workflowRead(path: string): Promise<WorkflowReadResult>
   workflowSave(req: WorkflowSaveRequest): Promise<WorkflowSaveResult>
   /** Error string or null. */
@@ -365,9 +391,15 @@ export interface DesktopApi {
   getUsage(force?: boolean): Promise<PlanUsage | null>
   usageHistory(): Promise<UsageHistory>
   checkUpdate(): Promise<UpdateInfo>
-  authStatus(): Promise<AuthStatus>
-  /** Starts `claude auth login` in a pty (data/exit via the pty events); resolves with its pty id. */
-  authLogin(): Promise<{ id?: string; error?: string }>
+  /** Login state of a Claude account (default: the active one). */
+  authStatus(account?: string): Promise<AuthStatus>
+  /** Starts `claude auth login` for an account (default: the active one) in a pty (data/exit via the pty events); resolves with its pty id. */
+  authLogin(account?: string): Promise<{ id?: string; error?: string }>
+  accountsList(): Promise<AccountsState>
+  accountsSetActive(id: string): Promise<void>
+  accountsAdd(): Promise<{ id: string }>
+  accountsRemove(id: string): Promise<void>
+  onAccountsChanged(cb: (s: AccountsState) => void): () => void
   // ---- Codex engine (docs/codex.md)
   codexStatus(): Promise<CodexStatus>
   /** Starts `codex login` in a hidden pty (same mechanism as authLogin); resolves with its pty id. */
@@ -388,12 +420,15 @@ export interface DesktopApi {
   window(action: 'minimize' | 'maximize' | 'close' | 'reload' | 'devtools' | 'quit'): void
   /** Mirrors the renderer's theme into Electron's nativeTheme (window background, native widgets). */
   setTheme(theme: Theme): void
+  /** Holds (true) or releases (false) a display-sleep blocker while a chat's cache is being kept warm. */
+  setKeepAwake(on: boolean): void
   onAgentEvent(cb: (e: AgentEvent) => void): () => void
   onPermissionRequest(cb: (r: PermissionRequest) => void): () => void
   onPermissionCancel(cb: (r: { chatId: string; requestId: string }) => void): () => void
   onChatExit(cb: (e: ChatExit) => void): () => void
   onChatContext(cb: (c: ChatContext) => void): () => void
-  onUsage(cb: (u: PlanUsage) => void): () => void
+  /** `null` = the active account has no cached usage yet (e.g. just switched). */
+  onUsage(cb: (u: PlanUsage | null) => void): () => void
   onSessionsChanged(cb: () => void): () => void
   onNotificationClick(cb: (e: { chatId: string }) => void): () => void
   /** Tray menu "New chat". */
@@ -475,6 +510,9 @@ export interface AuthStatus {
   state: 'in' | 'out' | 'unknown'
   method?: string
   provider?: string
+  email?: string
+  orgName?: string
+  subscriptionType?: string
 }
 
 export interface PtyInfo {
@@ -485,4 +523,11 @@ export interface PtyInfo {
   shell: string
   exited: boolean
   code?: number
+}
+
+export interface SkillInfo {
+  name: string
+  description: string
+  scope: 'project' | 'user'
+  path: string
 }

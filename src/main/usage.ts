@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { claudeExecutable } from './claudeBin'
 import type { PlanUsage, UsageRow } from '../shared/types'
 import type { RunnerRegistry } from './agent'
+import { accountEnv, activeAccount, ensureAccountDir } from './accounts'
 
 type Json = Record<string, any>
 
@@ -66,21 +67,35 @@ const MIN_INTERVAL_MS = 10 * 60_000
 const IDLE_INTERVAL_MS = 60 * 60_000
 const BACKOFF_MAX_MS = 60 * 60_000
 
+interface AccountUsage {
+  last: PlanUsage | null
+  inflight: Promise<PlanUsage | null> | null
+  failures: number
+  nextAllowedAt: number
+}
+
+/** Plan usage per account; every throttling rule applies per account and only the ACTIVE account is ever fetched. */
 export class UsageService {
-  private last: PlanUsage | null = null
-  private inflight: Promise<PlanUsage | null> | null = null
+  private accounts = new Map<string, AccountUsage>()
   private lastActivityAt = 0
-  private failures = 0
-  private nextAllowedAt = 0
 
   constructor(
     private runners: RunnerRegistry,
     private log: (s: string) => void,
-    private push: (u: PlanUsage) => void,
+    private push: (u: PlanUsage | null) => void,
   ) {}
 
+  private slot(account: string): AccountUsage {
+    let s = this.accounts.get(account)
+    if (!s) {
+      s = { last: null, inflight: null, failures: 0, nextAllowedAt: 0 }
+      this.accounts.set(account, s)
+    }
+    return s
+  }
+
   start(): void {
-    void this.refresh()
+    void this.refresh(activeAccount())
     setInterval(() => this.tick(), 60_000).unref?.()
   }
 
@@ -89,64 +104,81 @@ export class UsageService {
     this.lastActivityAt = Date.now()
   }
 
+  /** The active account changed: show its cached value (or nothing) at once and refresh when its own rules allow. */
+  activeChanged(): void {
+    const account = activeAccount()
+    this.push(this.slot(account).last)
+    this.tick()
+  }
+
   private tick(): void {
+    const account = activeAccount()
+    const s = this.slot(account)
     const now = Date.now()
-    if (now < this.nextAllowedAt) return
-    const last = this.last
+    if (now < s.nextAllowedAt) return
+    const last = s.last
     if (!last) {
-      void this.refresh()
+      void this.refresh(account)
       return
     }
     const age = now - last.fetchedAt
     const hasRows = last.rows.length > 0
-    if ((hasRows && this.lastActivityAt > last.fetchedAt && age >= MIN_INTERVAL_MS) || age >= IDLE_INTERVAL_MS || (!hasRows && !!last.error)) void this.refresh()
+    if ((hasRows && this.lastActivityAt > last.fetchedAt && age >= MIN_INTERVAL_MS) || age >= IDLE_INTERVAL_MS || (!hasRows && !!last.error)) void this.refresh(account)
   }
 
-  /** Cached value; fetches only when nothing is cached (outside backoff), or when forced, >= MIN_INTERVAL_MS old and outside backoff. */
+  /** Cached value of the active account; fetches only when nothing is cached (outside backoff), or when forced, >= MIN_INTERVAL_MS old and outside backoff. */
   get(force: boolean): Promise<PlanUsage | null> {
+    const account = activeAccount()
+    const s = this.slot(account)
     const now = Date.now()
-    const ok = now >= this.nextAllowedAt
-    if (ok && (!this.last || (force && now - this.last.fetchedAt >= MIN_INTERVAL_MS))) return this.refresh()
-    return Promise.resolve(this.last)
+    const ok = now >= s.nextAllowedAt
+    if (ok && (!s.last || (force && now - s.last.fetchedAt >= MIN_INTERVAL_MS))) return this.refresh(account)
+    return Promise.resolve(s.last)
   }
 
-  private refresh(): Promise<PlanUsage | null> {
-    if (this.inflight) return this.inflight
-    const p = this.fetchOnce()
+  /** Pushes only while the account is still the active one (a switch during a fetch just fills the cache). */
+  private emit(account: string, u: PlanUsage): void {
+    if (activeAccount() === account) this.push(u)
+  }
+
+  private refresh(account: string): Promise<PlanUsage | null> {
+    const s = this.slot(account)
+    if (s.inflight) return s.inflight
+    const p = this.fetchOnce(account)
       .then((u) => {
-        if (!u.available && u.rows.length === 0 && (this.last?.rows.length ?? 0) > 0) throw new Error('Usage response had no limits')
-        this.failures = 0
-        this.nextAllowedAt = 0
-        this.last = u
-        this.push(u)
+        if (!u.available && u.rows.length === 0 && (s.last?.rows.length ?? 0) > 0) throw new Error('Usage response had no limits')
+        s.failures = 0
+        s.nextAllowedAt = 0
+        s.last = u
+        this.emit(account, u)
         return u
       })
       .catch((e) => {
         const msg = e instanceof Error ? e.message : String(e)
-        this.failures++
-        const wait = Math.min(MIN_INTERVAL_MS * 2 ** (this.failures - 1), BACKOFF_MAX_MS)
-        this.nextAllowedAt = Date.now() + wait
+        s.failures++
+        const wait = Math.min(MIN_INTERVAL_MS * 2 ** (s.failures - 1), BACKOFF_MAX_MS)
+        s.nextAllowedAt = Date.now() + wait
         this.log(`usage: ${msg}; next try in ${Math.round(wait / 60_000)} min`)
-        this.last = { available: false, subscription: null, rows: [], ...this.last, fetchedAt: this.last?.fetchedAt ?? Date.now(), error: msg }
-        this.push(this.last)
-        return this.last
+        s.last = { available: false, subscription: null, rows: [], ...s.last, fetchedAt: s.last?.fetchedAt ?? Date.now(), error: msg }
+        this.emit(account, s.last)
+        return s.last
       })
       .finally(() => {
-        this.inflight = null
+        s.inflight = null
       })
-    this.inflight = p
+    s.inflight = p
     return p
   }
 
-  private async fetchOnce(): Promise<PlanUsage> {
+  private async fetchOnce(account: string): Promise<PlanUsage> {
     const work = (async () => {
       try {
-        const viaRunner = this.runners.any()?.usage()
+        const viaRunner = this.runners.any(account)?.usage()
         if (viaRunner) return await viaRunner
       } catch {
         /* fall back to a temporary query */
       }
-      return this.viaTemporaryQuery()
+      return this.viaTemporaryQuery(account)
     })()
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_, rej) => {
@@ -159,7 +191,7 @@ export class UsageService {
     }
   }
 
-  private async viaTemporaryQuery(): Promise<unknown> {
+  private async viaTemporaryQuery(account: string): Promise<unknown> {
     const log = this.log
     let release!: () => void
     const gate = new Promise<void>((res) => (release = res))
@@ -167,7 +199,9 @@ export class UsageService {
       await gate
     }
     const exe = claudeExecutable()
-    const q = query({ prompt: idle(), options: { cwd: homedir(), persistSession: false, stderr: (d) => log(d), ...(exe ? { pathToClaudeCodeExecutable: exe } : {}) } })
+    const env = accountEnv(account)
+    if (env) ensureAccountDir(account)
+    const q = query({ prompt: idle(), options: { cwd: homedir(), persistSession: false, stderr: (d) => log(d), ...(exe ? { pathToClaudeCodeExecutable: exe } : {}), ...(env ? { env } : {}) } })
     try {
       return await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })
     } finally {

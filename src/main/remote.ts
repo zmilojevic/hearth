@@ -19,19 +19,20 @@ import {
   type RemoteCredentials,
   type SessionState,
 } from '@anthropic-ai/claude-agent-sdk/bridge'
+import { accountConfigDir, DEFAULT_ACCOUNT } from './accounts'
 import type { ChatRunner, Emit, RunnerRegistry, RemoteHooks } from './agent'
 import type { PermissionMode, RemoteEnableInfo, RemoteStateEvent, UserContent } from '../shared/types'
 
 // Same default the CLI uses (BASE_API_URL). Deliberately not overridable by env: the OAuth token is only ever sent here.
 const BASE_URL = 'https://api.anthropic.com'
 const HTTP_TIMEOUT = 15_000
-const CREDENTIALS_FILE = join(homedir(), '.claude', '.credentials.json')
 const TOKEN_EXPIRED = 'Claude login token expired – send a message in any chat to refresh it'
 
 /** Fresh OAuth access token for the bridge HTTP calls only; never logged, never written, never sent to the renderer. */
-function readAccessToken(): string {
+function readAccessToken(account: string): string {
   let o: { accessToken?: string; expiresAt?: number } | undefined
-  if (process.platform === 'darwin') {
+  const file = join(accountConfigDir(account), '.credentials.json')
+  if (process.platform === 'darwin' && account === DEFAULT_ACCOUNT) {
     // Claude Code keeps the OAuth credentials in the login Keychain on macOS.
     try {
       const out = execFileSync('/usr/bin/security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], {
@@ -46,9 +47,9 @@ function readAccessToken(): string {
   }
   if (!o) {
     try {
-      o = JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf8')).claudeAiOauth
+      o = JSON.parse(readFileSync(file, 'utf8')).claudeAiOauth
     } catch {
-      throw new Error(process.platform === 'darwin' ? 'Not logged in to Claude' : 'Not logged in to Claude (no ~/.claude/.credentials.json)')
+      throw new Error(process.platform === 'darwin' && account === DEFAULT_ACCOUNT ? 'Not logged in to Claude' : `Not logged in to Claude (no ${file})`)
     }
   }
   if (!o?.accessToken) throw new Error('Not logged in to Claude (no access token)')
@@ -136,7 +137,7 @@ class RemoteBridge implements RemoteHooks {
       let cse = map[this.info.sessionId]
       let creds: RemoteCredentials | null = null
       if (cse) {
-        const r = await fetchRemoteCredentials(cse, BASE_URL, readAccessToken(), HTTP_TIMEOUT)
+        const r = await fetchRemoteCredentials(cse, BASE_URL, readAccessToken(this.runner.account), HTTP_TIMEOUT)
         if (r && 'worker_jwt' in r) creds = r
         // A stored session that was archived or deleted server-side: start a new one. Auth problems are not that.
         else if (r === null || isCredentialsRejection(r) || (isCredentialsFailure(r) && r.reason !== 'request_rejected')) throw new Error(failureText(r, 'Remote Control credentials'))
@@ -144,12 +145,12 @@ class RemoteBridge implements RemoteHooks {
       }
       if (!creds) {
         const model = this.info.model && this.info.model !== 'default' ? this.info.model : undefined
-        const created = await createCodeSession(BASE_URL, readAccessToken(), this.info.title || 'Hearth', HTTP_TIMEOUT, undefined, undefined, this.info.cwd, model)
+        const created = await createCodeSession(BASE_URL, readAccessToken(this.runner.account), this.info.title || 'Hearth', HTTP_TIMEOUT, undefined, undefined, this.info.cwd, model)
         if (typeof created !== 'string') throw new Error(failureText(created, 'Creating the claude.ai session'))
         cse = created
         map[this.info.sessionId] = cse
         saveMap(map)
-        const r = await fetchRemoteCredentials(cse, BASE_URL, readAccessToken(), HTTP_TIMEOUT)
+        const r = await fetchRemoteCredentials(cse, BASE_URL, readAccessToken(this.runner.account), HTTP_TIMEOUT)
         if (!r || !('worker_jwt' in r)) throw new Error(failureText(r, 'Remote Control credentials'))
         creds = r
       }
@@ -200,7 +201,7 @@ class RemoteBridge implements RemoteHooks {
   private async refresh(): Promise<void> {
     if (this.disposed || !this.handle) return
     try {
-      const r = await fetchRemoteCredentials(this.cse, BASE_URL, readAccessToken(), HTTP_TIMEOUT)
+      const r = await fetchRemoteCredentials(this.cse, BASE_URL, readAccessToken(this.runner.account), HTTP_TIMEOUT)
       if (!r || !('worker_jwt' in r)) throw new Error(failureText(r, 'Refreshing Remote Control credentials'))
       await this.handle.reconnectTransport({ ingressToken: r.worker_jwt, apiBaseUrl: r.api_base_url, epoch: r.worker_epoch })
       this.scheduleRefresh(r.expires_in)

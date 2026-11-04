@@ -155,7 +155,7 @@ export default function Composer({ chatId }: { chatId: string }) {
   const warmedAt = useStore((s) => (sid ? s.warmedAt[sid] ?? 0 : 0))
   const cacheTtl = useStore((s) => (sid ? s.meta[sid]?.cacheTtlMs : undefined) ?? 300_000)
   const cacheBusy = chat?.status === 'running' || chat?.status === 'compacting'
-  const coldAt = !codex && lastAt ? Math.max(lastAt, warmedAt) + cacheTtl : 0
+  const coldAt = !codex && lastAt && chat.messages.length > 0 ? Math.max(lastAt, warmedAt) + cacheTtl : 0
   const [, setColdTick] = useState(0)
   useEffect(() => {
     if (!coldAt || cacheBusy) return

@@ -4,6 +4,7 @@ import { Settings, X } from 'lucide-react'
 import { renderSVG } from 'uqr'
 import { useStore } from '../store'
 import Dropdown from './Dropdown'
+import AccountsSection from './AccountsSection'
 import { playChime } from '../sound'
 import { relativeTime, isPhone } from '../util'
 import type { Theme, LaunchTools, MobileStatus, PairInfo } from '@shared/types'
@@ -100,6 +101,8 @@ export default function SettingsPopover() {
   const setNotifications = useStore((s) => s.setNotifications)
   const notifySound = useStore((s) => s.notifySound)
   const setNotifySound = useStore((s) => s.setNotifySound)
+  const skillsCorner = useStore((s) => s.skillsCorner)
+  const setSkillsCorner = useStore((s) => s.setSkillsCorner)
   const updateCheck = useStore((s) => s.updateCheck)
   const setUpdateCheck = useStore((s) => s.setUpdateCheck)
   const update = useStore((s) => s.update)
@@ -169,6 +172,7 @@ export default function SettingsPopover() {
           </div>
           {!isPhone && (
             <>
+          <AccountsSection />
           <div className="toggle-row">
             <span className="toggle-text">
               <span>Editor</span>
@@ -215,6 +219,23 @@ export default function SettingsPopover() {
                   setNotifySound(!notifySound)
                   if (!notifySound) playChime('done')
                 }}
+              >
+                <span className="knob" />
+              </button>
+            </label>
+          )}
+          {!isPhone && (
+            <label className="toggle-row">
+              <span className="toggle-text">
+                <span>Skills list</span>
+                <span className="muted small">Project and user skills in the chat's corner</span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={skillsCorner !== 'hidden'}
+                className={`switch ${skillsCorner !== 'hidden' ? 'on' : ''}`}
+                onClick={() => setSkillsCorner(skillsCorner === 'hidden' ? 'shown' : 'hidden')}
               >
                 <span className="knob" />
               </button>

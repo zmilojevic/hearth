@@ -43,13 +43,14 @@ export class PtyManager {
 
   constructor(private emit: (channel: string, payload: unknown) => void) {}
 
-  create(cwd: string, cols: number, rows: number, run?: { command: string; args: string[]; kind: 'login' }): string {
+  create(cwd: string, cols: number, rows: number, run?: { command: string; args: string[]; kind: 'login'; env?: Record<string, string> }): string {
     const { shell, args } = run ? { shell: run.command, args: run.args } : pickShell()
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) {
       if (v === undefined || k.startsWith('ELECTRON_') || k.startsWith('CCD_') || k === 'CHROME_DESKTOP') continue
       env[k] = v
     }
+    if (run?.env) Object.assign(env, run.env)
     if (process.platform !== 'win32') {
       env.TERM = 'xterm-256color'
       env.COLORTERM = 'truecolor'

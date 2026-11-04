@@ -13,6 +13,7 @@ import { homedir } from 'node:os'
 import { isAbsolute } from 'node:path'
 import { CHATS_DIR } from './paths'
 import { claudeExecutable } from './claudeBin'
+import { accountEnv, activeAccount, ensureAccountDir, resolveAccount } from './accounts'
 import type { Runner } from './runnerTypes'
 import type { CodexServer } from './codex/appServer'
 import { CodexRunner } from './codex/runner'
@@ -84,6 +85,8 @@ function chatSystemPrompt(): string {
 
 export class ChatRunner implements Runner {
   readonly chatId: string
+  /** Claude account this runner (and its CLI process) belongs to; fixed at creation. */
+  readonly account: string
   private queue = new PushQueue<SDKUserMessage>()
   private q: Query | null = null
   private abort = new AbortController()
@@ -121,6 +124,7 @@ export class ChatRunner implements Runner {
     private onChange: () => void = () => {},
   ) {
     this.chatId = opts.chatId
+    this.account = resolveAccount(opts.account)
     this.sessionId = opts.resume && !opts.fork ? opts.resume : opts.resume ? undefined : (opts.sessionId ?? opts.chatId)
     this.lastModel = opts.model && opts.model !== 'default' ? opts.model : undefined
     this.lastMode = opts.permissionMode
@@ -143,6 +147,7 @@ export class ChatRunner implements Runner {
       model: this.lastModel,
       permissionMode: this.lastMode,
       holders: this.holders.size,
+      account: this.account,
     }
   }
 
@@ -255,6 +260,12 @@ export class ChatRunner implements Runner {
 
     const exe = claudeExecutable()
     if (exe) options.pathToClaudeCodeExecutable = exe
+    // The default account runs with the plain process env; extra accounts point the CLI at their own config dir.
+    const env = accountEnv(this.account)
+    if (env) {
+      ensureAccountDir(this.account)
+      options.env = env
+    }
     this.q = query({ prompt: this.queue, options })
     // A resumed chat gets no init message until its first turn.
     this.startTimer = setTimeout(() => {
@@ -511,15 +522,18 @@ function mapModels(models: Awaited<ReturnType<Query['supportedModels']>>): Model
   }))
 }
 
-/** Runs fn on a temporary idle query (no turn, nothing persisted) and always closes it. */
-export async function withIdleQuery<T>(cwd: string, log: (s: string) => void, fn: (q: Query) => Promise<T>): Promise<T> {
+/** Runs fn on a temporary idle query (no turn, nothing persisted) and always closes it; uses the active account unless one is given. */
+export async function withIdleQuery<T>(cwd: string, log: (s: string) => void, fn: (q: Query) => Promise<T>, accountId?: string): Promise<T> {
   let release!: () => void
   const gate = new Promise<void>((res) => (release = res))
   async function* idle(): AsyncGenerator<never> {
     await gate
   }
   const exe = claudeExecutable()
-  const q = query({ prompt: idle(), options: { cwd, persistSession: false, stderr: (d) => log(d), ...(exe ? { pathToClaudeCodeExecutable: exe } : {}) } })
+  const account = resolveAccount(accountId)
+  const env = accountEnv(account)
+  if (env) ensureAccountDir(account)
+  const q = query({ prompt: idle(), options: { cwd, persistSession: false, stderr: (d) => log(d), ...(exe ? { pathToClaudeCodeExecutable: exe } : {}), ...(env ? { env } : {}) } })
   try {
     return await fn(q)
   } finally {
@@ -532,15 +546,17 @@ export async function withIdleQuery<T>(cwd: string, log: (s: string) => void, fn
   }
 }
 
-let modelsCache: { at: number; models: ModelChoice[] } | undefined
+const modelsCache = new Map<string, { at: number; models: ModelChoice[] }>()
 
 /** All models of the account: any live runner, else a temporary idle query. Non-empty results are cached for 10 minutes. */
 export async function listAllModels(runners: RunnerRegistry, log: (s: string) => void): Promise<ModelChoice[]> {
-  if (modelsCache && Date.now() - modelsCache.at < 600_000) return modelsCache.models
-  const viaTemporaryQuery = (): Promise<ModelChoice[]> => withIdleQuery(homedir(), log, async (q) => mapModels(await q.supportedModels()))
+  const account = activeAccount()
+  const cached = modelsCache.get(account)
+  if (cached && Date.now() - cached.at < 600_000) return cached.models
+  const viaTemporaryQuery = (): Promise<ModelChoice[]> => withIdleQuery(homedir(), log, async (q) => mapModels(await q.supportedModels()), account)
   const work = (async () => {
     try {
-      const m = await runners.any()?.listModels()
+      const m = await runners.any(account)?.listModels()
       if (m?.length) return m
     } catch {
       /* fall back to a temporary query */
@@ -553,7 +569,7 @@ export async function listAllModels(runners: RunnerRegistry, log: (s: string) =>
   })
   try {
     const models = await Promise.race([work, timeout])
-    if (models.length) modelsCache = { at: Date.now(), models }
+    if (models.length) modelsCache.set(account, { at: Date.now(), models })
     return models
   } catch (e) {
     log(`app:models failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -667,9 +683,9 @@ export class RunnerRegistry {
     return p
   }
 
-  /** Any live Claude runner (first started); Codex runners cannot answer Claude-account questions (models, plan usage). */
-  any(): ChatRunner | undefined {
-    for (const r of this.runners.values()) if (r instanceof ChatRunner) return r
+  /** Any live Claude runner of the account (first started); Codex runners cannot answer Claude-account questions (models, plan usage). */
+  any(account: string): ChatRunner | undefined {
+    for (const r of this.runners.values()) if (r instanceof ChatRunner && !r.exited && r.account === account) return r
     return undefined
   }
 

@@ -68,7 +68,7 @@ function GroupBody({ open, children }: { open: boolean; children: React.ReactNod
 }
 
 /** Focus the composer textarea once it is mounted (retries a few frames after a chat opens). */
-function focusComposer(tries = 10) {
+function focusComposer(tries = 40) {
   if (isPhone) return // would pop the on-screen keyboard over the conversation
   const ta = document.querySelector<HTMLTextAreaElement>('.composer textarea')
   if (ta) ta.focus()
@@ -390,13 +390,17 @@ export default function Sidebar() {
   }
   const quickChat = (cwd: string): void => {
     void newChat({ cwd, permissionMode: lastMode })
+    requestAnimationFrame(() => focusComposer())
+  }
+  const quickGeneral = (): void => {
+    void newGeneralChat()
+    requestAnimationFrame(() => focusComposer())
   }
   const expandGroup = (g: Group): void => {
     setCollapsed({ ...collapsed, [g.cwd]: false })
     if (g.sessions.length === 0 && !search.trim()) {
-      if (g.general) void newGeneralChat()
+      if (g.general) quickGeneral()
       else quickChat(g.cwd)
-      requestAnimationFrame(() => focusComposer())
     }
   }
 
@@ -461,7 +465,6 @@ export default function Sidebar() {
     }
     setWtNew(null)
     quickChat(res.path)
-    requestAnimationFrame(() => focusComposer())
   }
   const commitWtRemove = async (): Promise<void> => {
     if (!wtRemove || wtRemove.busy) return
@@ -801,7 +804,7 @@ export default function Sidebar() {
                   title={g.general ? 'New chat' : 'New chat in this project'}
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (g.general) void newGeneralChat()
+                    if (g.general) quickGeneral()
                     else quickChat(g.cwd)
                   }}
                 >
@@ -814,9 +817,8 @@ export default function Sidebar() {
                     <button
                       className="btn"
                       onClick={() => {
-                        if (g.general) void newGeneralChat()
+                        if (g.general) quickGeneral()
                         else quickChat(g.cwd)
-                        requestAnimationFrame(() => focusComposer())
                       }}
                     >
                       <MessageSquarePlus size={15} /> New chat
@@ -947,8 +949,7 @@ export default function Sidebar() {
         <button
           className="btn wide"
           onClick={() => {
-            void newGeneralChat()
-            requestAnimationFrame(() => focusComposer())
+            quickGeneral()
           }}
         >
           <MessageSquarePlus size={15} /> New chat
@@ -963,7 +964,7 @@ export default function Sidebar() {
       {groupMenu && (
         <div className="context-menu" style={{ left: Math.min(groupMenu.x, window.innerWidth - 230), top: Math.min(groupMenu.y, window.innerHeight - 220) }} onClick={(e) => e.stopPropagation()}>
           {groupMenu.g.general ? (
-            <button onClick={() => { void newGeneralChat(); setGroupMenu(null) }}>
+            <button onClick={() => { quickGeneral(); setGroupMenu(null) }}>
               <MessageSquarePlus size={14} /> New chat
             </button>
           ) : (
@@ -972,7 +973,7 @@ export default function Sidebar() {
             <MessageSquarePlus size={14} /> New chat here
           </button>
           {codexOn && (
-            <button onClick={() => { void newChat({ cwd: groupMenu.g.cwd, permissionMode: lastMode, engine: engineFor(groupMenu.g.cwd) === 'codex' ? 'claude' : 'codex' }); setGroupMenu(null) }}>
+            <button onClick={() => { void newChat({ cwd: groupMenu.g.cwd, permissionMode: lastMode, engine: engineFor(groupMenu.g.cwd) === 'codex' ? 'claude' : 'codex' }); requestAnimationFrame(() => focusComposer()); setGroupMenu(null) }}>
               <MessageSquarePlus size={14} /> {engineFor(groupMenu.g.cwd) === 'codex' ? 'New Claude chat' : 'New Codex chat'}
             </button>
           )}
@@ -1391,7 +1392,7 @@ function SessionRow({
         )}
         {s.engine === 'codex' ? (
           <span className="engine-chip" title="Runs on Codex">codex</span>
-        ) : (
+        ) : live && chat.messages.length === 0 ? null : (
         <span className="cache" style={cacheStyle} title={warm ? 'Prompt cache lifetime remaining · kept warm' : 'Prompt cache lifetime remaining'}>
           {frozen ? (
             <Snowflake size={10} style={{ marginRight: 3, verticalAlign: '-1px', color: 'color-mix(in srgb, var(--ask) 80%, var(--muted))' }} />
