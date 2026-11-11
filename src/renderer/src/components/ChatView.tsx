@@ -7,10 +7,19 @@ import { AlertTriangle, Bot, Info } from 'lucide-react'
 import { subagentLine } from './ToolCard'
 import { useNow } from '../hooks'
 import { CodexLoginCard } from './CodexCards'
-import { accountLabel, loggedInAccounts } from '../accounts'
+import { accountLabel, limitPressure, loggedInAccounts } from '../accounts'
 
 /** A plan/usage limit hit (assistant `error` field or a result error text). */
 const RATE_LIMIT = /hit your (usage )?limit|usage limit|rate.?limit/i
+
+/** "1h 20m" until a future timestamp. */
+function untilText(ts: number): string {
+  const m = Math.max(1, Math.round((ts - Date.now()) / 60000))
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
+  return `${Math.round(h / 24)}d`
+}
 
 function focusComposerSoon(tries = 40): void {
   const ta = document.querySelector<HTMLTextAreaElement>('.composer textarea')
@@ -64,6 +73,10 @@ export default function ChatView({ chatId }: { chatId: string }) {
     return c?.engine === 'codex' && !!c.error && /already has an active writer/i.test(c.error)
   })
   const accounts = useStore((s) => s.accounts)
+  const claudeUsage = useStore((s) => s.claudeUsage)
+  const switchAt = useStore((s) => s.accountSwitchAt)
+  const resumeOnSwitch = useStore((s) => s.resumeOnSwitch)
+  const limitDismissed = useStore((s) => s.limitDismissed)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
 
@@ -92,6 +105,17 @@ export default function ChatView({ chatId }: { chatId: string }) {
   const pendingByTool = new Map(chat.pending.map((p) => [p.toolUseID, p]))
   const orphanPending = chat.pending.filter((p) => !chat.messages.some((m) => m.blocks.some((b) => b.kind === 'tool_use' && b.id === p.toolUseID)))
   const busy = chat.status === 'running' || chat.status === 'compacting'
+  const others = loggedInAccounts(accounts).filter((a) => a.id !== (chat.account ?? accounts.active))
+  const errorOffersSwitch = !!chat.error && !writerBusy && RATE_LIMIT.test(chat.error)
+  const pressure =
+    chat.engine !== 'codex' && !isPhone && switchAt > 0 && others.length > 0 && chat.status === 'idle' && !errorOffersSwitch
+      ? limitPressure(chat, claudeUsage, accounts, switchAt)
+      : null
+  const chatAccount = chat.account ?? accounts.active
+  const limitKey = pressure ? `${chatAccount}:${pressure.window}` : ''
+  const dismissedAt = limitKey ? limitDismissed[limitKey] : undefined
+  const showSwitchNote = !!pressure && !(dismissedAt !== undefined && (pressure.percent < 100 || dismissedAt >= 100))
+  const chatAccountLabel = accountLabel(accounts.accounts.find((a) => a.id === chatAccount) ?? { id: chatAccount })
 
   return (
     <div className="chat-scroll" ref={scroller}>
@@ -150,14 +174,42 @@ export default function ChatView({ chatId }: { chatId: string }) {
                   <button
                     key={a.id}
                     className="btn"
+                    title={
+                      resumeOnSwitch
+                        ? `Switch this chat to ${accountLabel(a)} and resume the interrupted work`
+                        : `Switch this chat to ${accountLabel(a)}`
+                    }
                     onClick={() => {
-                      void useStore.getState().continueWithAccount(chatId, a.id)
+                      void useStore.getState().continueWithAccount(chatId, a.id, { resume: useStore.getState().resumeOnSwitch })
                       focusComposerSoon()
                     }}
                   >
                     Continue with {accountLabel(a)}
                   </button>
                 ))}
+          </div>
+        )}
+        {showSwitchNote && pressure && (
+          <div className="account-switch-note">
+            <span>
+              {chatAccountLabel} has used {Math.min(100, Math.floor(pressure.percent))}% of its {pressure.label} limit
+              {pressure.resetsAt ? ` (resets in ${untilText(pressure.resetsAt)})` : ''}. Continue with:
+            </span>
+            {others.map((a) => (
+              <button
+                key={a.id}
+                className="btn"
+                onClick={() => {
+                  void useStore.getState().continueWithAccount(chatId, a.id)
+                  focusComposerSoon()
+                }}
+              >
+                Continue with {accountLabel(a)}
+              </button>
+            ))}
+            <button className="btn" onClick={() => useStore.getState().dismissLimitPrompt(limitKey, pressure.percent)}>
+              Not now
+            </button>
           </div>
         )}
         {chat.closed && !writerBusy && (

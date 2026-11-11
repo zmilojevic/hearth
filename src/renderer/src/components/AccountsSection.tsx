@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, X } from 'lucide-react'
 import { useStore } from '../store'
+import Dropdown from './Dropdown'
 import { accountDetail, accountLabel } from '../accounts'
 import type { AccountInfo } from '@shared/types'
 
@@ -47,6 +48,8 @@ function RemoveDialog({ account, onClose }: { account: AccountInfo; onClose: () 
 /** Gear-menu section "Claude accounts": switch the active account, remove extra ones, add another. */
 export default function AccountsSection() {
   const accounts = useStore((s) => s.accounts)
+  const switchAt = useStore((s) => s.accountSwitchAt)
+  const resumeOnSwitch = useStore((s) => s.resumeOnSwitch)
   const [removing, setRemoving] = useState<AccountInfo | null>(null)
   return (
     <div className="accounts-section">
@@ -79,6 +82,40 @@ export default function AccountsSection() {
       <button className="account-add" onClick={() => void useStore.getState().addAccount()}>
         <Plus size={13} /> Add account…
       </button>
+      {accounts.accounts.length >= 2 && (
+        <div className="account-limit-row">
+          <span className="muted small">Ask to switch at</span>
+          <Dropdown
+            value={String(switchAt)}
+            placement="up"
+            options={[
+              { value: '0', label: 'Off' },
+              { value: '75', label: '75%' },
+              { value: '85', label: '85%' },
+              { value: '90', label: '90%' },
+              { value: '95', label: '95%' },
+              { value: '100', label: 'Limit reached' },
+            ]}
+            onChange={(v) => useStore.getState().setAccountSwitchAt(Number(v))}
+          />
+        </div>
+      )}
+      {accounts.accounts.length >= 2 && (
+        <label className="toggle-row">
+          <span className="toggle-text">
+            <span>Resume interrupted work after switching</span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={resumeOnSwitch}
+            className={`switch ${resumeOnSwitch ? 'on' : ''}`}
+            onClick={() => useStore.getState().setResumeOnSwitch(!resumeOnSwitch)}
+          >
+            <span className="knob" />
+          </button>
+        </label>
+      )}
       {removing && <RemoveDialog account={removing} onClose={() => setRemoving(null)} />}
     </div>
   )

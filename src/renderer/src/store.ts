@@ -154,6 +154,16 @@ interface State {
   lastCwd: string
   notifications: boolean
   notifySound: boolean
+  /** Percent of a plan limit at which a chat offers another Claude account (0 = off). */
+  accountSwitchAt: number
+  setAccountSwitchAt(v: number): void
+  resumeOnSwitch: boolean
+  setResumeOnSwitch(v: boolean): void
+  /** Active account's plan usage (desktop), kept current via usage:changed. */
+  claudeUsage: PlanUsage | null
+  /** In-memory: `${account}:${window}` -> percent when the user dismissed the switch offer. */
+  limitDismissed: Record<string, number>
+  dismissLimitPrompt(key: string, percent: number): void
   skillsCorner: SkillsCornerMode
   /** Desktop only: look for a newer Hearth release (never installs). */
   updateCheck: boolean
@@ -173,7 +183,7 @@ interface State {
   addAccount(): Promise<void>
   removeAccount(id: string): Promise<void>
   /** Rate-limit offer: make `account` the active one and restart this chat's runner on the same session with it. */
-  continueWithAccount(chatId: string, account: string): Promise<void>
+  continueWithAccount(chatId: string, account: string, opts?: { resume?: boolean }): Promise<void>
   usageHistoryOpen: boolean
   theme: Theme
   diffTint: DiffTint
@@ -500,6 +510,27 @@ export const useStore = create<State>()(
     lastCwd: prefs.get('lastCwd', ''),
     notifications: prefs.get('notifications', true),
     notifySound: prefs.get('notifySound', true),
+    accountSwitchAt: prefs.get('accountSwitchAt', 90),
+    setAccountSwitchAt(v) {
+      prefs.set('accountSwitchAt', v)
+      set((s) => {
+        s.accountSwitchAt = v
+      })
+    },
+    resumeOnSwitch: prefs.get('resumeOnSwitch', true),
+    setResumeOnSwitch(v) {
+      prefs.set('resumeOnSwitch', v)
+      set((s) => {
+        s.resumeOnSwitch = v
+      })
+    },
+    claudeUsage: null,
+    limitDismissed: {},
+    dismissLimitPrompt(key, percent) {
+      set((s) => {
+        s.limitDismissed[key] = percent
+      })
+    },
     skillsCorner: (prefs.get<string>('skillsCorner', 'shown') === 'hidden' ? 'hidden' : 'shown') as SkillsCornerMode,
     updateCheck: prefs.get('updateCheck', true),
     dismissedUpdate: prefs.get('dismissedUpdate', ''),
@@ -1114,7 +1145,7 @@ export const useStore = create<State>()(
       await window.desktop.accountsRemove(id)
     },
 
-    async continueWithAccount(chatId, account) {
+    async continueWithAccount(chatId, account, switchOpts) {
       const before = get().chats[chatId]
       if (isPhone || !before || before.engine === 'codex') return
       await window.desktop.accountsSetActive(account)
@@ -1125,6 +1156,7 @@ export const useStore = create<State>()(
         c.status = 'starting'
         c.totalCost = 0 // cost counter restarts with the new CLI process
         c.error = undefined
+        c.rateLimit = undefined // belongs to the old account's runner
         c.pending = []
       })
       const opts: StartChatOptions = { chatId, cwd: before.cwd, permissionMode: before.requestedMode, account }
@@ -1135,6 +1167,7 @@ export const useStore = create<State>()(
       await startRunner(chatId, opts)
       if (get().chats[chatId]?.closed) return
       refreshAfterStart(chatId)
+      if (switchOpts?.resume && get().chats[chatId]?.messages.length) await get().sendMessage(chatId, RESUME_PROMPT)
     },
 
     openUsageHistory() {
@@ -1586,6 +1619,7 @@ export const useStore = create<State>()(
 )
 
 /** Chats this client closed itself; a runner kept alive by another client must not pull them back in. */
+const RESUME_PROMPT = 'Continue where you left off.'
 const closedHere = new Set<string>()
 /** Codex /clear: the sort slot of the cleared row, applied once the new thread's id arrives (system init). */
 const codexSortSlot = new Map<string, number>()
@@ -1980,6 +2014,8 @@ export function wireEvents(): void {
     }
     void window.desktop.accountsList().then((a) => useStore.setState({ accounts: a })).catch(() => {})
     window.desktop.onAccountsChanged(applyAccounts)
+    void window.desktop.getUsage().then((u) => useStore.setState({ claudeUsage: u })).catch(() => {})
+    window.desktop.onUsage((u) => useStore.setState({ claudeUsage: u }))
   }
   window.desktop.onSharedPrefChanged(({ key, value }) => {
     if (SHARED_PREFS.includes(key)) applyShared(key, value)

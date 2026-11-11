@@ -103,6 +103,8 @@ export interface ChatModel {
   tasks: BgTask[]
   /** Command names from the init message; a fallback for the slash-command picker. */
   slashCommands?: string[]
+  /** Highest plan-limit window reported by the latest `rate_limit_event` (the chat's own account); keys are the SDK's window names. */
+  rateLimit?: { percent: number; window: string; resetsAt: number | null }
 }
 
 export function emptyModel(): ChatModel {
@@ -269,6 +271,28 @@ export function applySdkMessage(model: ChatModel, m: any): void {
     case 'stream_event':
       if (m.parent_tool_use_id) return
       return applyStreamEvent(model, m)
+    case 'rate_limit_event': {
+      if (m.parent_tool_use_id) return
+      const info = m.rate_limit_info
+      if (!info) return
+      let best: ChatModel['rateLimit']
+      const consider = (window: string, util: unknown, resetsAtSec: unknown): void => {
+        if (typeof util !== 'number' || !isFinite(util)) return
+        const percent = util * 100
+        if (!best || percent > best.percent) best = { percent, window, resetsAt: typeof resetsAtSec === 'number' ? resetsAtSec * 1000 : null }
+      }
+      for (const [k, w] of Object.entries<any>(info.unifiedWindows ?? {})) consider(k, w?.utilization, w?.resetsAt)
+      const type: string | undefined = info.rateLimitType
+      if (type && type !== 'overage') {
+        consider(type, info.utilization, info.resetsAt)
+        if (info.status === 'rejected') {
+          if (best && best.window === type) best.percent = Math.max(best.percent, 100)
+          else if (!best || best.percent < 100) best = { percent: 100, window: type, resetsAt: typeof info.resetsAt === 'number' ? info.resetsAt * 1000 : null }
+        }
+      }
+      if (best) model.rateLimit = best
+      return
+    }
     case 'assistant': {
       if (m.parent_tool_use_id) return applySubagentFrame(model, m)
       const apiId: string | undefined = m.message?.id
