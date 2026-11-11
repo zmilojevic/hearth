@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import type { RemoteStateEvent, SessionSummary, LiveChat, PermissionRequest, PermissionMode, ModelChoice, EffortLevel, Engine, CodexMode, CodexStatus, PlanUsage, StartChatOptions, SessionMeta, ChatContext, SlashCommandInfo, AgentChoice, ContentBlock, UserContent, Theme, GitChanges, UpdateInfo, AccountsState, AuthStatus } from '@shared/types'
+import type { RemoteStateEvent, SessionSummary, LiveChat, PermissionRequest, PermissionMode, ModelChoice, EffortLevel, Engine, CodexMode, CodexStatus, PlanUsage, StartChatOptions, SessionMeta, ChatContext, SlashCommandInfo, AgentChoice, ContentBlock, UserContent, Theme, GitChanges, UpdateInfo, AccountsState, AuthStatus, TrayBadge } from '@shared/types'
 import { applySdkMessage, applyTranscript, emptyModel, restoreLive, restoreBackgroundAgents, restoreFinishedAgents, findTool, type ChatModel, type Block } from './reduce'
 import type { WfGraph, WorkflowFile, WorkflowReadResult, WorkflowScope } from '../../shared/workflow'
 import type { ImageAttachment } from './images'
@@ -118,6 +118,8 @@ interface State {
   projectNames: Record<string, string>
   /** Session ids replaced by a /clear: transcript kept on disk, never listed in the sidebar. */
   hiddenSessions: string[]
+  /** Sidebar lists archived chats too (cleared with /clear, archived in Codex). Per device. */
+  showArchived: boolean
   /** Sidebar sort-time override for a session that replaced a cleared one (keeps the row's slot). */
   sessionSortTime: Record<string, number>
   /** Session ids whose prompt cache is kept warm while idle. */
@@ -255,6 +257,9 @@ interface State {
   setDraft(chatId: string, text: string): void
   setSearch(q: string): void
   setRecentHours(h: number): void
+  setShowArchived(v: boolean): void
+  /** Bring an archived chat back (Claude: drop it from hiddenSessions; Codex: thread/unarchive). */
+  unarchiveSession(sessionId: string): Promise<void>
   toggleChanges(): void
   toggleChangesMax(): void
   setChangesMax(v: boolean): void
@@ -348,6 +353,7 @@ function placeAfterPinned(s: { pinnedProjects: string[]; projectOrder: string[] 
 }
 
 let lastKeepAwake: boolean | undefined
+let lastTrayBadge: TrayBadge | undefined
 /** Keeps the PC awake while a chat's cache is being kept warm (an idle/sleeping PC would let the cache expire). */
 function syncKeepAwake(): void {
   if (isPhone) return
@@ -445,6 +451,7 @@ export const useStore = create<State>()(
     projectOrder: prefs.get<string[]>('projectOrder', []),
     projectNames: prefs.get<Record<string, string>>('projectNames', {}),
     hiddenSessions: prefs.get<string[]>('hiddenSessions', []),
+    showArchived: prefs.get<boolean>('showArchived', false),
     sessionSortTime: prefs.get<Record<string, number>>('sessionSortTime', {}),
     keepWarm: prefs.get<string[]>('keepWarm', []),
     remoteSessions: prefs.get<string[]>('remoteSessions', []),
@@ -878,6 +885,8 @@ export const useStore = create<State>()(
       const uuid = crypto.randomUUID()
       const before = get().chats[chatId]
       if (!before) return
+      // Writing to an archived chat brings it back.
+      if (before.sessionId && isArchivedId(get(), before.sessionId)) await get().unarchiveSession(before.sessionId)
       // The CLI process ended (crash, error, or it was closed): start it again
       // on the same session before queueing the message.
       if (before.closed) {
@@ -1251,6 +1260,33 @@ export const useStore = create<State>()(
       set((s) => {
         s.recentHours = h
       })
+    },
+
+    setShowArchived(v) {
+      prefs.set('showArchived', v)
+      set((s) => {
+        s.showArchived = v
+      })
+    },
+
+    async unarchiveSession(sessionId) {
+      const st = get()
+      const row = st.sessions.find((x) => x.sessionId === sessionId)
+      if (st.hiddenSessions.includes(sessionId)) {
+        const hidden = st.hiddenSessions.filter((id) => id !== sessionId)
+        prefs.set('hiddenSessions', hidden)
+        set((s) => {
+          s.hiddenSessions = hidden
+        })
+      }
+      if (row?.archived) {
+        try {
+          await window.desktop.unarchiveSession(sessionId)
+        } catch {
+          return
+        }
+        await get().loadSessions()
+      }
     },
 
     setChangesWidth(px) {
@@ -1928,6 +1964,15 @@ export function wireEvents(): void {
   void window.desktop.liveChats().then((l) => useStore.getState().setLive(l)).catch(() => {})
   window.desktop.onLiveChanged((l) => useStore.getState().setLive(l))
   if (!isPhone) {
+    const syncTrayBadge = (): void => {
+      const chats = Object.values(useStore.getState().chats).filter((c) => !c.closed)
+      const badge: TrayBadge = chats.some((c) => c.pending.length) ? 'ask' : chats.some((c) => c.unread) ? 'done' : null
+      if (badge === lastTrayBadge) return
+      lastTrayBadge = badge
+      window.desktop.setTrayBadge(badge)
+    }
+    useStore.subscribe(syncTrayBadge)
+    syncTrayBadge()
     const applyAccounts = (a: AccountsState): void => {
       const switched = a.active !== useStore.getState().accounts.active
       useStore.setState({ accounts: a })
@@ -2002,7 +2047,7 @@ export function wireEvents(): void {
         }
         if (message.type === 'result' && c.error && CODEX_AUTH_ERROR.test(c.error) && s.codexStatus) s.codexStatus.loggedIn = false
       } else if (c.error === 'authentication_failed' && !isPhone && (!c.account || c.account === s.accounts.active)) s.auth = 'out'
-      if (message.type === 'result' && (s.activeChatId !== chatId || !document.hasFocus())) c.unread = true
+      if (message.type === 'result' && !interrupted && !c.queue.length && !stillWorking(c) && (s.activeChatId !== chatId || !document.hasFocus())) c.unread = true
       if (message.type === 'system' && message.subtype === 'commands_changed' && Array.isArray(message.commands)) {
         c.commands = message.commands.map((x: SlashCommandInfo) => ({ name: x.name, description: x.description, argumentHint: x.argumentHint, aliases: x.aliases }))
       }
@@ -2112,4 +2157,9 @@ export function wireEvents(): void {
   window.desktop.onSessionsChanged(() => {
     void useStore.getState().loadSessions()
   })
+}
+
+/** Cleared with /clear (hiddenSessions) or archived in Codex. */
+function isArchivedId(st: Pick<State, 'hiddenSessions' | 'sessions'>, sessionId: string): boolean {
+  return st.hiddenSessions.includes(sessionId) || !!st.sessions.find((x) => x.sessionId === sessionId)?.archived
 }

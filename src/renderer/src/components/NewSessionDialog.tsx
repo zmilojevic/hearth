@@ -66,7 +66,7 @@ export default function NewSessionDialog() {
 
   const recentDirs = useMemo(() => {
     const seen = new Map<string, number>()
-    for (const s of sessions) if (s.cwd && s.cwd !== generalDir) seen.set(s.cwd, Math.max(seen.get(s.cwd) ?? 0, s.lastModified))
+    for (const s of sessions) if (s.cwd && s.cwd !== generalDir && !s.archived) seen.set(s.cwd, Math.max(seen.get(s.cwd) ?? 0, s.lastModified))
     return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([d]) => d)
   }, [sessions, generalDir])
 

@@ -9,13 +9,21 @@ const ADD = '__add'
 /** Top-bar chip (desktop, only with two or more Claude accounts): shows the active account and switches it. */
 export default function AccountSwitcher() {
   const accounts = useStore((s) => s.accounts)
+  const chatAccount = useStore((s) => {
+    const c = s.activeChatId ? s.chats[s.activeChatId] : undefined
+    return c && c.engine !== 'codex' ? c.account : undefined
+  })
   if (isPhone || accounts.accounts.length < 2) return null
   const active = accounts.accounts.find((a) => a.id === accounts.active) ?? accounts.accounts[0]
   const options = [
     ...accounts.accounts.map((a) => ({ value: a.id, label: accountLabel(a), description: accountDetail(a) || undefined })),
     { value: ADD, label: 'Add account…' },
   ]
+  const chatAcc = chatAccount && chatAccount !== accounts.active ? accounts.accounts.find((a) => a.id === chatAccount) : undefined
+  const chatLabel = chatAcc ? accountLabel(chatAcc) : chatAccount
+  const chatDetail = chatAcc ? accountDetail(chatAcc) : ''
   return (
+    <>
     <Dropdown
       className="account-dd"
       value={active.id}
@@ -28,5 +36,14 @@ export default function AccountSwitcher() {
         else void useStore.getState().setActiveAccount(v)
       }}
     />
+    {chatAccount && chatAccount !== accounts.active && (
+      <span
+        className="account-chat"
+        title={`This chat runs on ${chatLabel}${chatDetail ? ` (${chatDetail})` : ''} – it keeps the account it started with`}
+      >
+        <UserRound size={12} /> <span className="account-chat-label">chat: {chatLabel}</span>
+      </span>
+    )}
+    </>
   )
 }

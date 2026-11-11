@@ -1,4 +1,4 @@
-import type { AgentChoice, AttachResult, LiveChat, McpServerInfo, ModelChoice, PermissionRequest, PermissionResponse, SlashCommandInfo, UserContent } from '../shared/types'
+import type { AgentChoice, AttachResult, LiveChat, McpAuthResult, McpServerInfo, ModelChoice, PermissionRequest, PermissionResponse, SlashCommandInfo, UserContent } from '../shared/types'
 
 /**
  * What RunnerRegistry and the IPC handlers need from a chat runner. Implemented by `ChatRunner` (Claude, agent.ts) and
@@ -35,6 +35,8 @@ export interface Runner {
   mcpStatus(): Promise<McpServerInfo[]>
   toggleMcp(name: string, enabled: boolean): Promise<void>
   reconnectMcp(name: string): Promise<void>
+  mcpAuthenticate(name: string): Promise<McpAuthResult>
+  mcpAuthCallback(name: string, callbackUrl: string): Promise<string | null>
   warmCache(): Promise<boolean>
   taskOutput(taskId: string): Promise<{ output: string; total_bytes: number; truncated: boolean } | null>
   stopTask(taskId: string): Promise<void>

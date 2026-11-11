@@ -117,6 +117,46 @@
 .mcp-note.err {
   color: color-mix(in srgb, var(--err) 65%, var(--muted));
 }
+.mcp-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text-2);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.mcp-link:hover:not(:disabled) {
+  color: var(--text);
+}
+.mcp-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mcp-paste {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+.mcp-paste input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+.mcp-paste input:focus {
+  border-color: var(--accent-muted);
+}
+.mcp-note .err {
+  color: color-mix(in srgb, var(--err) 65%, var(--muted));
+}
 .mcp-tools {
   list-style: none;
   margin: 4px 0 2px 28px;

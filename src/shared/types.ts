@@ -47,6 +47,8 @@ export interface SessionSummary {
   createdAt?: number
   /** 'codex' for Codex threads (sessionId = thread id); absent = Claude. */
   engine?: Engine
+  /** Archived Codex thread (listed only for the sidebar's "Show archived"). */
+  archived?: boolean
 }
 
 export interface SessionMeta {
@@ -268,6 +270,12 @@ export interface GitChanges {
   error?: string
 }
 
+export interface McpAuthResult {
+  authUrl?: string
+  callbackExpected: boolean
+  error?: string
+}
+
 export interface McpServerInfo {
   name: string
   status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'
@@ -355,6 +363,7 @@ export interface DesktopApi {
   subagentTranscript(cwd: string, sessionId: string, toolUseId: string, sinceMtime?: number): Promise<SubagentTranscript>
   getSessionMeta(items: { sessionId: string; cwd: string; engine?: Engine }[]): Promise<SessionMeta[]>
   renameSession(sessionId: string, title: string, cwd?: string, engine?: Engine): Promise<void>
+  unarchiveSession(sessionId: string): Promise<void>
   deleteSession(sessionId: string, cwd?: string, engine?: Engine): Promise<void>
   /** Delete every listed transcript of a project; its folder under ~/.claude/projects goes too once empty. */
   deleteProject(cwd: string, sessionIds: string[]): Promise<void>
@@ -422,6 +431,8 @@ export interface DesktopApi {
   setTheme(theme: Theme): void
   /** Holds (true) or releases (false) a display-sleep blocker while a chat's cache is being kept warm. */
   setKeepAwake(on: boolean): void
+  /** Tray icon dot: blue = a chat needs input, green = a chat finished unseen, null = plain icon. */
+  setTrayBadge(state: TrayBadge): void
   onAgentEvent(cb: (e: AgentEvent) => void): () => void
   onPermissionRequest(cb: (r: PermissionRequest) => void): () => void
   onPermissionCancel(cb: (r: { chatId: string; requestId: string }) => void): () => void
@@ -446,6 +457,10 @@ export interface DesktopApi {
   mcpStatus(chatId: string): Promise<McpServerInfo[]>
   mcpToggle(chatId: string, name: string, enabled: boolean): Promise<void>
   mcpReconnect(chatId: string, name: string): Promise<void>
+  /** Starts OAuth for a `needs-auth` server (undocumented SDK call); the CLI listens on its own localhost callback. */
+  mcpAuthenticate(chatId: string, name: string): Promise<McpAuthResult>
+  /** Hands the CLI the URL the browser ended on (browser on another device); error text or null. */
+  mcpAuthCallback(chatId: string, name: string, callbackUrl: string): Promise<string | null>
   /** Creates `<repo root>/.claude/worktrees/<name>` on branch `worktree-<name>` from HEAD. */
   worktreeAdd(cwd: string, name: string): Promise<{ path: string } | { error: string }>
   /** Removes the worktree folder; the branch is kept. */
@@ -531,3 +546,5 @@ export interface SkillInfo {
   scope: 'project' | 'user'
   path: string
 }
+
+export type TrayBadge = 'ask' | 'done' | null

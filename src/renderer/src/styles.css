@@ -3018,3 +3018,48 @@ pre.diff {
 [data-diff-tint='gutter'] .diff-sign {
   margin-right: 7px;
 }
+
+/* Sidebar "Archived" toggle and archived rows */
+.archived-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.archived-toggle:hover {
+  color: var(--text-2);
+}
+.archived-toggle:focus-visible {
+  outline: 1px solid var(--accent-muted);
+  outline-offset: 0;
+}
+.archived-toggle .box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-2);
+}
+.archived-toggle.on .box {
+  border-color: var(--accent-muted);
+}
+.row.archived .row-title {
+  opacity: 0.65;
+}
+.row-archived {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--muted);
+  opacity: 0.8;
+}

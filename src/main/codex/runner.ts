@@ -3,12 +3,12 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { CodexMode, ContentBlock, LiveChat, AttachResult, ModelChoice, PermissionRequest, PermissionResponse, StartChatOptions, UserContent, AgentChoice, McpServerInfo, SlashCommandInfo } from '../../shared/types'
+import type { CodexMode, ContentBlock, LiveChat, AttachResult, ModelChoice, PermissionRequest, PermissionResponse, StartChatOptions, UserContent, AgentChoice, McpAuthResult, McpServerInfo, SlashCommandInfo } from '../../shared/types'
 import type { Runner } from '../runnerTypes'
 import type { CodexServer, ThreadSubscriber } from './appServer'
 import type { RpcId, ThreadItem, ThreadStartedResponse, ThreadTokenUsage, Turn, UserInput } from './protocol'
 import { listCodexModels } from './account'
-import { rememberCodexId } from './sessions'
+import { rememberCodexId, isCodexArchived, codexUnarchive } from './sessions'
 import {
   assistantMessage,
   blockDelta,
@@ -150,7 +150,15 @@ export class CodexRunner implements Runner {
       const base: Record<string, unknown> = { cwd: o.cwd, ...modeThreadParams(this.codexMode) }
       if (this.lastModel) base.model = this.lastModel
       let res: ThreadStartedResponse
-      if (o.resume && !o.fork) res = await this.server.request('thread/resume', { threadId: o.resume, ...base })
+      if (o.resume && !o.fork) {
+        try {
+          res = await this.server.request('thread/resume', { threadId: o.resume, ...base })
+        } catch (e) {
+          if (!isCodexArchived(o.resume)) throw e
+          await codexUnarchive(this.server, o.resume)
+          res = await this.server.request('thread/resume', { threadId: o.resume, ...base })
+        }
+      }
       else if (o.resume) res = await this.server.request('thread/fork', { threadId: o.resume, ...base })
       else res = await this.server.request('thread/start', { ...base, ...(o.ephemeral ? { ephemeral: true } : {}) })
       if (this.closed) return
@@ -483,6 +491,12 @@ export class CodexRunner implements Runner {
   }
   async toggleMcp(_name: string, _enabled: boolean): Promise<void> {}
   async reconnectMcp(_name: string): Promise<void> {}
+  async mcpAuthenticate(_name: string): Promise<McpAuthResult> {
+    return { callbackExpected: false, error: 'Not supported for Codex chats' }
+  }
+  async mcpAuthCallback(_name: string, _callbackUrl: string): Promise<string | null> {
+    return 'Not supported for Codex chats'
+  }
   async warmCache(): Promise<boolean> {
     return false
   }

@@ -17,7 +17,7 @@ import { accountEnv, activeAccount, ensureAccountDir, resolveAccount } from './a
 import type { Runner } from './runnerTypes'
 import type { CodexServer } from './codex/appServer'
 import { CodexRunner } from './codex/runner'
-import type { StartChatOptions, LiveChat, AttachResult, PermissionRequest, PermissionResponse, PermissionMode, ModelChoice, EffortLevel, SlashCommandInfo, AgentChoice, UserContent, McpServerInfo } from '../shared/types'
+import type { StartChatOptions, LiveChat, AttachResult, PermissionRequest, PermissionResponse, PermissionMode, ModelChoice, EffortLevel, SlashCommandInfo, AgentChoice, UserContent, McpServerInfo, McpAuthResult } from '../shared/types'
 
 /** Minimal push-based async iterable used as the streaming prompt. */
 class PushQueue<T> implements AsyncIterable<T> {
@@ -448,6 +448,31 @@ export class ChatRunner implements Runner {
 
   async reconnectMcp(name: string): Promise<void> {
     await this.q?.reconnectMcpServer(name)
+  }
+
+  /** Undocumented SDK call: the CLI opens its own localhost callback and reconnects the server after approval. */
+  async mcpAuthenticate(name: string): Promise<McpAuthResult> {
+    const q = this.q as any
+    if (!q) return { callbackExpected: false, error: 'Chat is not running' }
+    if (typeof q.mcpAuthenticate !== 'function') return { callbackExpected: false, error: 'Not supported by this Claude Code version' }
+    try {
+      const r = await q.mcpAuthenticate(name)
+      return { authUrl: r?.authUrl || undefined, callbackExpected: !!r?.callbackExpected }
+    } catch (err) {
+      return { callbackExpected: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  async mcpAuthCallback(name: string, callbackUrl: string): Promise<string | null> {
+    const q = this.q as any
+    if (!q) return 'Chat is not running'
+    if (typeof q.mcpSubmitOAuthCallbackUrl !== 'function') return 'Not supported by this Claude Code version'
+    try {
+      await q.mcpSubmitOAuthCallbackUrl(name, callbackUrl)
+      return null
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
   }
 
   /** Keep-alive: an (undocumented) /btw side question reuses the cache prefix and leaves no transcript entry. */

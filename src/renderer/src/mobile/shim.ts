@@ -222,6 +222,7 @@ export function installDesktop(platform: string): void {
     window: () => {},
     setTheme: () => {},
     setKeepAwake: () => {},
+    setTrayBadge: () => {},
     checkUpdate: () => Promise.reject(new Error(unavailable)),
     authStatus: () => Promise.resolve({ state: 'unknown' }),
     authLogin: () => Promise.resolve({ error: unavailable }),

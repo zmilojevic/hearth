@@ -20,6 +20,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.account-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-2);
+  color: var(--text-2);
+  font-size: 12px;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.account-chat-label {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .usage-pair .account-dd {
   margin-right: 4px;
 }

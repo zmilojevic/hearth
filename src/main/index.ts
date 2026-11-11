@@ -8,7 +8,7 @@ import { listSessions, getSessionMessages, renameSession, deleteSession } from '
 import { RunnerRegistry, listAllModels } from './agent'
 import { CodexServer, codexBinary } from './codex/appServer'
 import { CodexAccountService, hasAgentsMd } from './codex/account'
-import { listCodexSessions, codexMessages, codexSessionMeta, codexRename, codexDelete, isCodexId, invalidateCodexList } from './codex/sessions'
+import { listCodexSessions, codexMessages, codexSessionMeta, codexRename, codexDelete, codexUnarchive, isCodexId, invalidateCodexList } from './codex/sessions'
 import { handle, on } from './ipc'
 import { registerSharedPrefs } from './sharedPrefs'
 import { readSubagentTranscript } from './subagents'
@@ -25,7 +25,7 @@ import { authStatus, refreshAccountInfo } from './auth'
 import { accountConfigDir, activeAccount, addAccount, DEFAULT_ACCOUNT, ensureAccountDir, listAccounts, onAccountsChanged, removeAccount, resolveAccount, setActiveAccount } from './accounts'
 import { claudeBinary } from './claudeBin'
 import { CHATS_DIR } from './paths'
-import { setupTray, focusWindow } from './tray'
+import { setupTray, setTrayBadge, focusWindow } from './tray'
 import { listSkills } from './skills'
 import { workflowList, workflowRead, workflowSave, workflowDelete, workflowAgents } from './workflows'
 import { resourceFile } from './resources'
@@ -157,6 +157,11 @@ handle('sessions:rename', async (_ctx, sessionId: string, title: string, cwd?: s
   await renameSession(sessionId, title, { dir: cwd })
 })
 
+handle('sessions:unarchive', async (_ctx, sessionId: string) => {
+  await codexUnarchive(codexServer, sessionId)
+  emit('sessions:changed', null)
+})
+
 handle('sessions:delete', async (_ctx, sessionId: string, cwd?: string, engine?: Engine) => {
   if (isCodex(sessionId, engine)) return codexDelete(codexServer, sessionId)
   await deleteSession(sessionId, { dir: cwd })
@@ -243,6 +248,30 @@ handle('chat:mcpStatus', async (_ctx, chatId: string) => {
 handle('chat:mcpToggle', (_ctx, chatId: string, name: string, enabled: boolean) =>
   runners.get(chatId)?.toggleMcp(name, enabled).catch((err) => log(`mcpToggle: ${String(err)}`)),
 )
+handle('chat:mcpAuth', async (_ctx, chatId: string, name: string) => {
+  const r = runners.get(chatId)
+  if (!r) return { callbackExpected: false, error: 'Chat is not running' }
+  try {
+    const res = await r.mcpAuthenticate(name)
+    if (res.error) log(`mcpAuth: ${res.error}`)
+    return res
+  } catch (err) {
+    log(`mcpAuth: ${String(err)}`)
+    return { callbackExpected: false, error: String(err) }
+  }
+})
+handle('chat:mcpAuthCallback', async (_ctx, chatId: string, name: string, callbackUrl: string) => {
+  const r = runners.get(chatId)
+  if (!r) return 'Chat is not running'
+  try {
+    const err = await r.mcpAuthCallback(name, callbackUrl)
+    if (err) log(`mcpAuthCallback: ${err}`)
+    return err
+  } catch (err) {
+    log(`mcpAuthCallback: ${String(err)}`)
+    return String(err)
+  }
+})
 handle('chat:mcpReconnect', (_ctx, chatId: string, name: string) =>
   runners.get(chatId)?.reconnectMcp(name).catch((err) => log(`mcpReconnect: ${String(err)}`)),
 )
@@ -368,6 +397,9 @@ handle('pty:idle', (_ctx, id: string) => ptys.isIdle(id))
 handle('shell:openPath', (_ctx, p: string) => shell.openPath(p))
 handle('app:home', () => homedir())
 handle('app:chatsDir', () => CHATS_DIR)
+on('app:trayBadge', (_ctx, state: unknown) => {
+  if (state === 'ask' || state === 'done' || state === null) setTrayBadge(state)
+})
 let keepAwakeId: number | null = null
 on('app:keepAwake', (_ctx, on: boolean) => {
   if (on && keepAwakeId === null) {

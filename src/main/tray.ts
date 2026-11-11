@@ -56,9 +56,52 @@ async function hyprWorkspaces(): Promise<{ ours: number; active: number } | null
   }
 }
 
+/** Draws an anti-aliased dot with a transparent ring into the bottom-right corner of a BGRA bitmap (returns a copy). */
+export function drawBadge(buf: Buffer, w: number, h: number, rgb: [number, number, number]): Buffer {
+  const out = Buffer.from(buf)
+  const r = (w * 0.44) / 2
+  const ring = Math.max(1, Math.round(w / 16))
+  const cx = w - r
+  const cy = h - r
+  const outer = r + ring
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+      if (d > outer + 0.5) continue
+      const i = (y * w + x) * 4
+      // Clear the icon under the ring, fading out at its edge.
+      const keep = Math.min(1, Math.max(0, d - outer + 0.5))
+      if (keep < 1) {
+        for (let k = 0; k < 4; k++) out[i + k] = Math.round(out[i + k] * keep)
+      }
+      const cover = Math.min(1, Math.max(0, r - d + 0.5))
+      if (cover > 0) {
+        const a = out[i + 3] / 255
+        const na = cover + a * (1 - cover)
+        const mix = (c: number, o: number): number => Math.round((c * cover + o * a * (1 - cover)) / na)
+        out[i] = mix(rgb[2], out[i])
+        out[i + 1] = mix(rgb[1], out[i + 1])
+        out[i + 2] = mix(rgb[0], out[i + 2])
+        out[i + 3] = Math.round(na * 255)
+      }
+    }
+  }
+  return out
+}
+
+const BADGE_COLORS = { ask: [0x5b, 0x8f, 0xd0], done: [0x4f, 0xae, 0x73] } as const
+const BADGE_TIPS = { ask: 'Hearth \u2014 needs your input', done: 'Hearth \u2014 finished' }
+let applyBadge: ((state: 'ask' | 'done' | null) => void) | null = null
+
+/** Shows a coloured dot on the tray icon (blue = needs input, green = finished); null = plain icon. */
+export function setTrayBadge(state: 'ask' | 'done' | null): void {
+  applyBadge?.(state)
+}
+
 export function setupTray(deps: TrayDeps): Tray | null {
   const { getWindow, createWindow, quit, log, emit } = deps
   let tray: Tray
+  let base: Electron.NativeImage
   try {
     const load = (name: string): Electron.NativeImage => {
       const p = resourceFile(name)
@@ -78,12 +121,40 @@ export function setupTray(deps: TrayDeps): Tray | null {
       const size = process.platform === 'win32' ? 16 : 32
       if (!img.isEmpty()) img = img.resize({ width: size, height: size })
     }
+    base = img
     tray = new Tray(img)
   } catch (err) {
     log(`tray: unavailable: ${String(err)}`)
     return null
   }
   tray.setToolTip('Hearth')
+
+  const badged = new Map<'ask' | 'done', Electron.NativeImage>()
+  let current: 'ask' | 'done' | null = null
+  applyBadge = (state) => {
+    if (state === current) return
+    current = state
+    try {
+      tray.setToolTip(state ? BADGE_TIPS[state] : 'Hearth')
+      if (process.platform === 'darwin') {
+        tray.setTitle(state ? '\u25cf' : '')
+        return
+      }
+      if (!state || base.isEmpty()) {
+        tray.setImage(base)
+        return
+      }
+      let img = badged.get(state)
+      if (!img) {
+        const { width, height } = base.getSize()
+        img = nativeImage.createFromBitmap(drawBadge(base.toBitmap(), width, height, [...BADGE_COLORS[state]]), { width, height })
+        badged.set(state, img)
+      }
+      tray.setImage(img)
+    } catch (err) {
+      log(`tray: badge failed: ${String(err)}`)
+    }
+  }
 
   const show = async (): Promise<BrowserWindow | null> => {
     let win = getWindow()

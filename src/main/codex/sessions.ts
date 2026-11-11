@@ -9,6 +9,8 @@ import { threadToTranscript } from './translate'
  */
 const codexIds = new Set<string>()
 const metaById = new Map<string, SessionMeta>()
+/** Ids of archived Codex threads (rebuilt on every list). */
+let archivedIds = new Set<string>()
 let listCache: { at: number; rows: SessionSummary[] } | undefined
 let listing: Promise<SessionSummary[]> | undefined
 
@@ -18,6 +20,7 @@ const PAGE = 100
 
 export const rememberCodexId = (id: string): void => void codexIds.add(id)
 export const isCodexId = (id: string): boolean => codexIds.has(id)
+export const isCodexArchived = (id: string): boolean => archivedIds.has(id)
 
 /** Drop the cached list (the Codex session files changed). */
 export function invalidateCodexList(): void {
@@ -75,6 +78,34 @@ export function listCodexSessions(server: CodexServer, log: (s: string) => void)
         cursor = res.nextCursor
         if (!cursor || res.data.length === 0) break
       }
+      // Archived threads (thread/list with archived:true returns only those). A failure here keeps the normal rows.
+      const archived = new Set<string>()
+      try {
+        let acursor: string | null = null
+        let count = 0
+        while (count < LIST_LIMIT) {
+          const res: { data: Thread[]; nextCursor: string | null } = await server.request('thread/list', {
+            limit: PAGE,
+            cursor: acursor,
+            sortKey: 'updated_at',
+            sourceKinds: ['cli', 'vscode', 'appServer'],
+            archived: true,
+          })
+          for (const t of res.data) {
+            if (t.ephemeral || !t.cwd) continue
+            codexIds.add(t.id)
+            metaById.set(t.id, metaOf(t))
+            archived.add(t.id)
+            rows.push({ ...summaryOf(t), archived: true })
+            count++
+          }
+          acursor = res.nextCursor
+          if (!acursor || res.data.length === 0) break
+        }
+      } catch (e) {
+        log(`codex archived sessions: ${e instanceof Error ? e.message : String(e)}`)
+      }
+      archivedIds = archived
       listCache = { at: Date.now(), rows }
       return rows
     } catch (e) {
@@ -115,5 +146,11 @@ export async function codexDelete(server: CodexServer, threadId: string): Promis
   await server.request('thread/delete', { threadId })
   codexIds.delete(threadId)
   metaById.delete(threadId)
+  invalidateCodexList()
+}
+
+export async function codexUnarchive(server: CodexServer, threadId: string): Promise<void> {
+  await server.request('thread/unarchive', { threadId })
+  archivedIds.delete(threadId)
   invalidateCodexList()
 }

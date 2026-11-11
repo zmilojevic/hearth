@@ -1,6 +1,6 @@
 import type React from 'react'
 import { Fragment, useMemo, useRef, useState, useEffect } from 'react'
-import { Plus, Search, Clock, FolderGit2, FolderPlus, ChevronRight, Pencil, Trash2, GitFork, FolderOpen, Pin, PinOff, MessageSquarePlus, ChevronsDownUp, ChevronsUpDown, XCircle, FolderX, Flame, Snowflake, Check, MessageCircle, GitBranchPlus, Code, SquareTerminal, Smartphone, SlidersHorizontal, Workflow } from 'lucide-react'
+import { Plus, Search, Clock, FolderGit2, FolderPlus, ChevronRight, Pencil, Trash2, GitFork, FolderOpen, Pin, PinOff, MessageSquarePlus, ChevronsDownUp, ChevronsUpDown, XCircle, FolderX, Flame, Snowflake, Check, MessageCircle, GitBranchPlus, Code, SquareTerminal, Smartphone, SlidersHorizontal, Workflow, Archive, ArchiveRestore } from 'lucide-react'
 import { openFolderInEditor, openTerminalAt } from '../openIn'
 import { useStore, KEEP_WARM_MAX_IDLE_MS, isGeneral, engineFor } from '../store'
 import { EFFORT_LEVELS, type SessionSummary, type LiveChat, type ModelChoice, type Engine } from '@shared/types'
@@ -99,6 +99,9 @@ export default function Sidebar() {
   const loaded = useStore((s) => s.sessionsLoaded)
   const hiddenSessions = useStore((s) => s.hiddenSessions)
   const sessionSortTime = useStore((s) => s.sessionSortTime)
+  const showArchived = useStore((s) => s.showArchived)
+  const setShowArchived = useStore((s) => s.setShowArchived)
+  const unarchiveSession = useStore((s) => s.unarchiveSession)
   const search = useStore((s) => s.search)
   const setSearch = useStore((s) => s.setSearch)
   const recentHours = useStore((s) => s.recentHours)
@@ -194,7 +197,8 @@ export default function Sidebar() {
       byCwd.set(dir, { cwd: dir, name: projectName(projectNames, dir), sessions: [], latest: 0, pinned: true })
     }
     for (const s of sessions) {
-      if (!s.cwd || hidden.has(s.sessionId)) continue
+      if (!s.cwd) continue
+      if (!showArchived && (hidden.has(s.sessionId) || s.archived)) continue
       if (s.lastModified < cutoff) continue
       if (q) {
         const hay = `${s.customTitle ?? ''} ${s.summary ?? ''} ${s.firstPrompt ?? ''} ${s.cwd === generalDir ? '' : `${s.cwd} ${projectNames[s.cwd] ?? ''}`} ${s.sessionId}`.toLowerCase()
@@ -243,10 +247,10 @@ export default function Sidebar() {
       return b.latest - a.latest
     })
     return q && general.sessions.length === 0 ? projects : [...projects, general]
-  }, [sessions, chats, search, recentHours, pinnedProjects, projectOrder, projectNames, hiddenSessions, sessionSortTime, generalDir])
+  }, [sessions, chats, search, recentHours, pinnedProjects, projectOrder, projectNames, hiddenSessions, showArchived, sessionSortTime, generalDir])
   const groups = useMemo(() => allGroups.filter((g) => !g.general), [allGroups])
   // Exit transitions: removed rows / projects stay (leaving) until their collapse animation has run.
-  const exitReset = search + '|' + recentHours
+  const exitReset = search + '|' + recentHours + '|' + showArchived
   const shownGroups = useExitList(allGroups, (g) => g.cwd, { resetKey: exitReset })
   const shownRows = useExitList(
     allGroups.flatMap((g) => g.sessions.map((s) => ({ cwd: g.cwd, s }))),
@@ -700,6 +704,17 @@ export default function Sidebar() {
         />
         <div className="head-actions no-drag">
           <button
+            type="button"
+            role="checkbox"
+            aria-checked={showArchived}
+            className={`archived-toggle${showArchived ? ' on' : ''}`}
+            title="Show archived chats (cleared with /clear, archived in Codex)"
+            onClick={() => setShowArchived(!showArchived)}
+          >
+            <span className="box">{showArchived && <Check size={10} strokeWidth={3} />}</span>
+            Archived
+          </button>
+          <button
             className="icon-btn"
             title={allCollapsed ? 'Expand all projects' : 'Collapse all projects'}
             onClick={() => {
@@ -835,6 +850,7 @@ export default function Sidebar() {
                           leaving={leaving}
                           chat={chat}
                           liveInfo={liveRunners[s.sessionId]}
+                          archived={!!s.archived || hiddenSessions.includes(s.sessionId)}
                           active={!!openBySession[s.sessionId] && openBySession[s.sessionId] === activeChatId && agentView?.chatId !== activeChatId}
                           meta={meta[s.sessionId]}
                           modelMax={modelMax}
@@ -905,6 +921,14 @@ export default function Sidebar() {
             >
               <Smartphone size={14} /> Remote control
               {remoteSessions.includes(menu.s.sessionId) && <Check size={14} style={{ marginLeft: 'auto' }} />}
+            </button>
+          )}
+          {(menu.s.archived || hiddenSessions.includes(menu.s.sessionId)) && (
+            <button onClick={() => {
+              void unarchiveSession(menu.s.sessionId)
+              setMenu(null)
+            }}>
+              <ArchiveRestore size={14} /> Unarchive
             </button>
           )}
           {onDisk.has(menu.s.sessionId) && (
@@ -1286,6 +1310,7 @@ function ProjectDefaultsDialog({ cwd, name, onClose }: { cwd: string; name: stri
 function SessionRow({
   s,
   leaving,
+  archived,
   chat,
   liveInfo,
   active,
@@ -1303,6 +1328,8 @@ function SessionRow({
   s: SessionSummary
   /** Removed from the list; collapsing out, not interactive. */
   leaving?: boolean
+  /** Cleared with /clear or archived in Codex (shown via "Archived"). */
+  archived?: boolean
   chat?: Chat
   /** Runner in the main process for a session this client has not opened. */
   liveInfo?: LiveChat
@@ -1359,7 +1386,7 @@ function SessionRow({
   const wt = s.cwd ? worktreeOf(s.cwd) : null
   return (
     <button
-      className={`row ${active ? 'active' : ''}${leaving ? ' leaving' : ''}`}
+      className={`row ${active ? 'active' : ''}${leaving ? ' leaving' : ''}${archived ? ' archived' : ''}`}
       inert={leaving}
       ref={(el) => (leaving ? animateOut(el) : resetOut(el))}
       data-sid={s.sessionId}
@@ -1380,6 +1407,7 @@ function SessionRow({
       <div className="row-line">
         {dot !== 'idle' ? <span className={`dot ${dot}`} title={DOT_TITLE[dot]} /> : <span className="dot slot" />}
         <span className="row-title">{title}</span>
+        {archived && compact && <Archive size={11} className="row-archived" aria-label="Archived" />}
         {!busy && <span className="row-time" title="Last response finished">{relativeTime(lastAt)}</span>}
       </div>
       {!compact && (
@@ -1406,6 +1434,11 @@ function SessionRow({
           {modelLabel(model ?? (live ? chat.requestedModel : undefined))}
           {effort && <span className="row-effort"> · {effort}</span>}
         </span>
+        {archived && !compact && (
+          <span className="row-archived" title="Archived">
+            <Archive size={11} />
+          </span>
+        )}
         {wt && (
           <span className="wt-chip" title={`Git worktree ${wt.name}`}>
             <FolderGit2 size={10} />
