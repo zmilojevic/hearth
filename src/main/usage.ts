@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { claudeExecutable } from './claudeBin'
 import type { PlanUsage, UsageRow } from '../shared/types'
 import type { RunnerRegistry } from './agent'
-import { accountEnv, activeAccount, ensureAccountDir } from './accounts'
+import { accountEnv, activeAccount, ensureAccountDir, listAccounts } from './accounts'
 
 type Json = Record<string, any>
 
@@ -83,7 +83,65 @@ export class UsageService {
     private runners: RunnerRegistry,
     private log: (s: string) => void,
     private push: (u: PlanUsage | null) => void,
+    private pushAll: () => void = () => {},
   ) {}
+
+  private allTimer: ReturnType<typeof setTimeout> | null = null
+  /** Coalesces cache changes of any account into one `usage:allChanged` (1 s debounce). */
+  private changedAny(): void {
+    if (this.allTimer) return
+    this.allTimer = setTimeout(() => {
+      this.allTimer = null
+      this.pushAll()
+    }, 1000)
+  }
+
+  /** Cached usage of every known account (null = nothing cached yet). */
+  all(): Record<string, PlanUsage | null> {
+    const out: Record<string, PlanUsage | null> = {}
+    for (const a of listAccounts().accounts) out[a.id] = this.accounts.get(a.id)?.last ?? null
+    return out
+  }
+
+  /** A live `rate_limit_event` of a runner of `account`: updates the session / weekly rows without touching fetchedAt (throttling stays as is). */
+  noteRateLimit(account: string, m: Json): void {
+    const info: Json | undefined = m?.rate_limit_info
+    if (!info) return
+    const wins: Array<[string, Json]> = []
+    const uw: Json = info.unifiedWindows ?? {}
+    if (uw.five_hour) wins.push(['five_hour', uw.five_hour])
+    if (uw.seven_day) wins.push(['seven_day', uw.seven_day])
+    if (!wins.length && typeof info.utilization === 'number' && (info.rateLimitType === 'five_hour' || info.rateLimitType === 'seven_day')) {
+      wins.push([info.rateLimitType, { utilization: info.utilization, resetsAt: info.resetsAt }])
+    }
+    if (!wins.length) return
+    const s = this.slot(account)
+    const base: PlanUsage = s.last ?? { available: true, subscription: null, rows: [], fetchedAt: 0 }
+    const rows = base.rows.slice()
+    let changed = false
+    for (const [w, e] of wins) {
+      if (typeof e.utilization !== 'number') continue
+      const kind = w === 'five_hour' ? 'session' : 'weekly_all'
+      const percent = e.utilization * 100
+      const i = rows.findIndex((r) => r.kind === kind)
+      const resetsAt = typeof e.resetsAt === 'number' ? new Date(e.resetsAt * 1000).toISOString() : (rows[i]?.resetsAt ?? null)
+      const row: UsageRow = {
+        kind,
+        group: kind === 'session' ? 'session' : 'weekly',
+        label: kind === 'session' ? 'Current session' : 'All models',
+        percent,
+        resetsAt,
+        severity: severityOf(percent),
+        active: rows[i]?.active ?? false,
+      }
+      if (i >= 0) rows[i] = row
+      else rows.push(row)
+      changed = true
+    }
+    if (!changed) return
+    s.last = { ...base, available: true, rows, error: undefined }
+    this.emit(account, s.last)
+  }
 
   private slot(account: string): AccountUsage {
     let s = this.accounts.get(account)
@@ -96,7 +154,10 @@ export class UsageService {
 
   start(): void {
     void this.refresh(activeAccount())
-    setInterval(() => this.tick(), 60_000).unref?.()
+    setInterval(() => {
+      this.tick()
+      this.tickInactive()
+    }, 60_000).unref?.()
   }
 
   /** Records that transcripts changed (a session did something); cheap, never fetches. */
@@ -126,6 +187,24 @@ export class UsageService {
     if ((hasRows && this.lastActivityAt > last.fetchedAt && age >= MIN_INTERVAL_MS) || age >= IDLE_INTERVAL_MS || (!hasRows && !!last.error)) void this.refresh(account)
   }
 
+  private startedAt = Date.now()
+  /** Inactive logged-in accounts: hourly at most, one at a time, never within the first 30 s after startup. */
+  private tickInactive(): void {
+    const now = Date.now()
+    if (now - this.startedAt < 30_000) return
+    const accts = listAccounts().accounts
+    if (accts.some((a) => this.accounts.get(a.id)?.inflight)) return
+    const active = activeAccount()
+    for (const a of accts) {
+      if (a.id === active || !(a.email || a.org || a.plan)) continue
+      const s = this.slot(a.id)
+      if (now < s.nextAllowedAt) continue
+      if (s.last && now - s.last.fetchedAt < IDLE_INTERVAL_MS) continue
+      void this.refresh(a.id)
+      return
+    }
+  }
+
   /** Cached value of the active account; fetches only when nothing is cached (outside backoff), or when forced, >= MIN_INTERVAL_MS old and outside backoff. */
   get(force: boolean): Promise<PlanUsage | null> {
     const account = activeAccount()
@@ -138,6 +217,7 @@ export class UsageService {
 
   /** Pushes only while the account is still the active one (a switch during a fetch just fills the cache). */
   private emit(account: string, u: PlanUsage): void {
+    this.changedAny()
     if (activeAccount() === account) this.push(u)
   }
 

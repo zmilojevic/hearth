@@ -17,6 +17,7 @@ import ToolStrip from './components/ToolStrip'
 import EmptyPane from './components/EmptyPane'
 import LoginDialog from './components/LoginDialog'
 import UsageHistoryDialog from './components/UsageHistoryDialog'
+import AwayCard from './components/AwayCard'
 import WorkflowsView from './components/workflows/WorkflowsView'
 import { initTerminals, focusTerminal, terminalHasFocus, setTerminalEscapeHandler } from './terminals'
 import { isPhone } from './util'
@@ -62,6 +63,7 @@ export default function App() {
   })
   const closeTab = useStore((s) => s.closeTab)
   const findOpen = useStore((s) => s.findOpen)
+  const findSeq = useStore((s) => s.findSeq)
   const setFindOpen = useStore((s) => s.setFindOpen)
   const changesOpen = useStore((s) => s.changesOpen)
   const toggleChanges = useStore((s) => s.toggleChanges)
@@ -72,6 +74,7 @@ export default function App() {
   const loginProvider = useStore((s) => s.loginProvider)
   const loginAccount = useStore((s) => s.loginAccount)
   const usageHistoryOpen = useStore((s) => s.usageHistoryOpen)
+  const awayCard = useStore((s) => s.awayCard)
   const [agentModel, setAgentModel] = useState<string | undefined>()
 
   useEffect(() => {
@@ -274,7 +277,7 @@ export default function App() {
               {activeChatId && !(agentView && agentView.chatId === activeChatId) && (
                 <>
                   <div className="chat-area">
-                    {findOpen && <FindBar chatId={activeChatId} />}
+                    {findOpen && <FindBar key={findSeq} chatId={activeChatId} />}
                     <ChatView chatId={activeChatId} />
                   </div>
                   <Composer chatId={activeChatId} />
@@ -328,6 +331,7 @@ export default function App() {
       {showNewDialog && <NewSessionDialog />}
       {loginOpen && !isPhone && <LoginDialog provider={loginProvider} account={loginAccount} />}
       {usageHistoryOpen && <UsageHistoryDialog />}
+      {awayCard && !isPhone && <AwayCard items={awayCard} />}
       {isPhone && <ReconnectPill />}
     </div>
   )

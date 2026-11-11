@@ -1,6 +1,6 @@
 // Types shared between the Electron main process and the renderer.
 
-import type { WorkflowFile, WorkflowReadResult, WorkflowSaveRequest, WorkflowSaveResult, WorkflowAgent } from './workflow'
+import type { WorkflowFile, WorkflowReadResult, WorkflowSaveRequest, WorkflowSaveResult, WorkflowAgent, WorkflowJournalEntry } from './workflow'
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto'
 
@@ -49,6 +49,19 @@ export interface SessionSummary {
   engine?: Engine
   /** Archived Codex thread (listed only for the sidebar's "Show archived"). */
   archived?: boolean
+}
+
+/** One full-text hit (`sessions:search`): the newest matching message of a session. */
+export interface MessageHit {
+  sessionId: string
+  cwd: string
+  title?: string
+  /** ±60 chars around the first match, whitespace collapsed. */
+  snippet: string
+  uuid: string
+  timestamp: number
+  /** Matching messages in this session. */
+  count: number
 }
 
 export interface SessionMeta {
@@ -138,14 +151,27 @@ export interface StartChatOptions {
   permissionMode: PermissionMode
   resume?: string
   fork?: boolean
-  /** Session id for a new chat; defaults to chatId (Claude only: a Codex thread id is assigned by Codex). */
+  /** With resume + fork: keep the history only up to and including this transcript entry uuid (rewind). */
+  resumeAt?: string
+  /** Session id for a new chat (or a fork); defaults to chatId (Claude only: a Codex thread id is assigned by Codex). */
   sessionId?: string
   /** Backend; defaults to claude. */
   engine?: Engine
   /** Codex chats only (`permissionMode` is ignored for them). */
   codexMode?: CodexMode
+  /** Claude project chats only: appended to the claude_code system prompt (the project note). */
+  appendSystemPrompt?: string
   /** Claude account id (see accounts.ts); defaults to the active account. Running chats keep the one they started with. */
   account?: string
+}
+
+/** Result of `chat:rewindFiles` (dry run or real). */
+export interface RewindFilesResult {
+  canRewind: boolean
+  error?: string
+  filesChanged?: string[]
+  insertions?: number
+  deletions?: number
 }
 
 /** What `chat:start` resolves with. */
@@ -368,6 +394,8 @@ export interface DesktopApi {
   /** Delete every listed transcript of a project; its folder under ~/.claude/projects goes too once empty. */
   deleteProject(cwd: string, sessionIds: string[]): Promise<void>
   /** Resolves with the new runner's generation; events of older runners carry smaller ones. */
+  /** Case-insensitive full-text search over user/assistant text of Claude transcripts (Codex threads are not searched). */
+  searchSessions(query: string, limit?: number): Promise<MessageHit[]>
   startChat(opts: StartChatOptions): Promise<StartChatResult>
   send(chatId: string, content: UserContent, uuid: string): Promise<void>
   respond(chatId: string, requestId: string, response: PermissionResponse): Promise<void>
@@ -394,10 +422,18 @@ export interface DesktopApi {
   /** Error string or null. */
   workflowDelete(path: string): Promise<string | null>
   workflowAgents(root: string): Promise<WorkflowAgent[]>
+  /** Per-agent progress of a workflow run dir (`…/subagents/workflows/wf_*`); [] when unreadable or outside the projects dirs. */
+  workflowJournal(dir: string): Promise<WorkflowJournalEntry[]>
   listAgents(chatId: string): Promise<AgentChoice[]>
   warmCache(chatId: string): Promise<boolean>
+  /** Claude only. Restores files to their state at a user message (dryRun = just report what would change). */
+  rewindFiles(chatId: string, userUuid: string, dryRun: boolean): Promise<RewindFilesResult>
+  /** The `parentUuid` of a user line in the transcript (the entry to fork at); null for the first message / not found. */
+  rewindPoint(cwd: string, sessionId: string, userUuid: string): Promise<string | null>
   requestContext(chatId: string): Promise<void>
   getUsage(force?: boolean): Promise<PlanUsage | null>
+  /** Cached plan usage per Claude account id (null = nothing cached yet). */
+  usageAll(): Promise<Record<string, PlanUsage | null>>
   usageHistory(): Promise<UsageHistory>
   checkUpdate(): Promise<UpdateInfo>
   /** Login state of a Claude account (default: the active one). */
@@ -440,6 +476,7 @@ export interface DesktopApi {
   onChatContext(cb: (c: ChatContext) => void): () => void
   /** `null` = the active account has no cached usage yet (e.g. just switched). */
   onUsage(cb: (u: PlanUsage | null) => void): () => void
+  onUsageAll(cb: (u: Record<string, PlanUsage | null>) => void): () => void
   onSessionsChanged(cb: () => void): () => void
   onNotificationClick(cb: (e: { chatId: string }) => void): () => void
   /** Tray menu "New chat". */

@@ -36,7 +36,7 @@ function findRanges(root: Element, q: string): Range[] {
  */
 export default function FindBar({ chatId }: { chatId: string }) {
   const setFindOpen = useStore((s) => s.setFindOpen)
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(() => useStore.getState().findQuery)
   const [count, setCount] = useState(0)
   const [current, setCurrent] = useState(0)
   const ranges = useRef<Range[]>([])

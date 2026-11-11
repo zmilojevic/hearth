@@ -17,7 +17,7 @@ import { accountEnv, activeAccount, ensureAccountDir, resolveAccount } from './a
 import type { Runner } from './runnerTypes'
 import type { CodexServer } from './codex/appServer'
 import { CodexRunner } from './codex/runner'
-import type { StartChatOptions, LiveChat, AttachResult, PermissionRequest, PermissionResponse, PermissionMode, ModelChoice, EffortLevel, SlashCommandInfo, AgentChoice, UserContent, McpServerInfo, McpAuthResult } from '../shared/types'
+import type { StartChatOptions, LiveChat, AttachResult, PermissionRequest, PermissionResponse, PermissionMode, ModelChoice, EffortLevel, SlashCommandInfo, AgentChoice, UserContent, McpServerInfo, McpAuthResult, RewindFilesResult } from '../shared/types'
 
 /** Minimal push-based async iterable used as the streaming prompt. */
 class PushQueue<T> implements AsyncIterable<T> {
@@ -125,7 +125,7 @@ export class ChatRunner implements Runner {
   ) {
     this.chatId = opts.chatId
     this.account = resolveAccount(opts.account)
-    this.sessionId = opts.resume && !opts.fork ? opts.resume : opts.resume ? undefined : (opts.sessionId ?? opts.chatId)
+    this.sessionId = opts.resume && !opts.fork ? opts.resume : opts.resume ? opts.sessionId : (opts.sessionId ?? opts.chatId)
     this.lastModel = opts.model && opts.model !== 'default' ? opts.model : undefined
     this.lastMode = opts.permissionMode
   }
@@ -234,9 +234,13 @@ export class ChatRunner implements Runner {
       permissionMode: this.opts.permissionMode,
       allowDangerouslySkipPermissions: this.opts.permissionMode === 'bypassPermissions',
       includePartialMessages: true,
+      // Lets "Edit from here" restore the files Claude changed (Edit/Write tools; not Bash side effects).
+      enableFileCheckpointing: true,
       canUseTool,
       abortController: this.abort,
-      systemPrompt: { type: 'preset', preset: 'claude_code' },
+      systemPrompt: this.opts.appendSystemPrompt?.trim()
+        ? { type: 'preset', preset: 'claude_code', append: this.opts.appendSystemPrompt.trim() }
+        : { type: 'preset', preset: 'claude_code' },
       stderr: (d) => this.log(d),
       // Thinking text is omitted by default; ask for summaries so the UI can show them.
       // Passed as a raw CLI flag so the user's own thinking settings stay in effect.
@@ -253,7 +257,12 @@ export class ChatRunner implements Runner {
     if (this.opts.effort) options.effort = this.opts.effort
     if (this.opts.resume) {
       options.resume = this.opts.resume
-      if (this.opts.fork) options.forkSession = true
+      if (this.opts.fork) {
+        options.forkSession = true
+        // A fork may pick its own id (rewind keeps the sidebar row, so the renderer needs it up front).
+        if (this.opts.sessionId) options.sessionId = this.opts.sessionId
+        if (this.opts.resumeAt) options.resumeSessionAt = this.opts.resumeAt
+      }
     } else {
       options.sessionId = this.opts.sessionId ?? this.chatId
     }
@@ -330,6 +339,17 @@ export class ChatRunner implements Runner {
       parent_tool_use_id: null,
       uuid: uuid as never,
     })
+  }
+
+  /** Restores files to their state at a user message (needs `enableFileCheckpointing`); never throws. */
+  async rewindFiles(userUuid: string, dryRun: boolean): Promise<RewindFilesResult> {
+    if (!this.q || this.exited) return { canRewind: false, error: 'Chat is not running' }
+    try {
+      const r = await this.q.rewindFiles(userUuid, { dryRun })
+      return { canRewind: !!r.canRewind, error: r.error, filesChanged: r.filesChanged, insertions: r.insertions, deletions: r.deletions }
+    } catch (e) {
+      return { canRewind: false, error: e instanceof Error ? e.message : String(e) }
+    }
   }
 
   respond(requestId: string, response: PermissionResponse): void {

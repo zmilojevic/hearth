@@ -3,6 +3,7 @@ import { ChevronRight, GitBranch, MoreHorizontal, Plus, Repeat, ArrowLeft, Arrow
 import { referencesOf } from '../../../../shared/workflow'
 import type { WfAgentStep, WfGraph, WfPhase, WfStep, WorkflowIssue } from '../../../../shared/workflow'
 import { modelLabel } from '../../util'
+import type { NodeProgress } from './liveRun'
 import {
   addAgentStep,
   addForEach,
@@ -49,6 +50,17 @@ function AgentChips({ s }: { s: WfAgentStep }) {
         </span>
       )}
     </div>
+  )
+}
+
+function LiveDot({ p }: { p?: NodeProgress }) {
+  if (!p) return null
+  const counts = p.total != null ? `${p.done ?? 0}/${p.total}` : ''
+  return (
+    <span className={`wf-live-badge ${p.state}`} title={p.state === 'running' ? 'Running' : p.state === 'done' ? 'Done' : 'Not started'}>
+      {counts && <span>{counts}</span>}
+      <span className={`wf-live-dot ${p.state}`} />
+    </span>
   )
 }
 
@@ -112,6 +124,8 @@ interface Props {
   selected: string | null
   onSelect: (id: string | null) => void
   onChange: (g: WfGraph) => void
+  /** Live run status per step id (top-level steps and for-each stages); null = not showing a run. */
+  live?: Map<string, NodeProgress> | null
 }
 
 interface Link {
@@ -122,7 +136,7 @@ interface Link {
   hot: boolean
 }
 
-export default function WorkflowCanvas({ graph, metaPhases, issues, selected, onSelect, onChange }: Props) {
+export default function WorkflowCanvas({ graph, metaPhases, issues, selected, onSelect, onChange, live }: Props) {
   const innerRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const cardRefs = useRef(new Map<string, HTMLElement>())
@@ -253,7 +267,7 @@ export default function WorkflowCanvas({ graph, metaPhases, issues, selected, on
   const stepCard = (phase: WfPhase, s: WfStep, i: number) => {
     const ids = s.kind === 'forEach' ? [s.id, ...s.stages.map((x) => x.id)] : [s.id]
     const level = worst(issues, ids)
-    const cls = `wf-card${selected === s.id ? ' selected' : ''}${drop && drop.phaseId === phase.id && drop.index === i ? ' drop-before' : ''}`
+    const cls = `wf-card${selected === s.id ? ' selected' : ''}${live?.get(s.id) ? ` live-${live.get(s.id)!.state}` : ''}${drop && drop.phaseId === phase.id && drop.index === i ? ' drop-before' : ''}`
     return (
       <div
         key={s.id}
@@ -274,6 +288,7 @@ export default function WorkflowCanvas({ graph, metaPhases, issues, selected, on
           {s.kind === 'forEach' && <Repeat size={12} className="wf-card-icon" />}
           <span className="wf-card-label">{s.label || s.id}</span>
           <Dot level={level} />
+          <LiveDot p={live?.get(s.id)} />
         </div>
         {s.kind === 'agent' ? (
           <AgentChips s={s} />
@@ -286,7 +301,7 @@ export default function WorkflowCanvas({ graph, metaPhases, issues, selected, on
               {s.stages.map((st) => (
                 <div
                   key={st.id}
-                  className={`wf-stage${selected === st.id ? ' selected' : ''}`}
+                  className={`wf-stage${selected === st.id ? ' selected' : ''}${live?.get(st.id) ? ` live-${live.get(st.id)!.state}` : ''}`}
                   onClick={(e) => {
                     e.stopPropagation()
                     onSelect(st.id)
@@ -295,6 +310,7 @@ export default function WorkflowCanvas({ graph, metaPhases, issues, selected, on
                   <span className="wf-stage-label">{st.label || st.id}</span>
                   <span className="wf-stage-agent">{st.agentType ?? 'default'}</span>
                   <Dot level={worst(issues, [st.id])} />
+                  {live?.get(st.id) && <span className={`wf-live-dot ${live.get(st.id)!.state}`} />}
                 </div>
               ))}
             </div>

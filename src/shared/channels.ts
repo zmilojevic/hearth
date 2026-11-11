@@ -11,6 +11,7 @@ export const INVOKES = {
   getSessionMeta: 'sessions:meta',
   renameSession: 'sessions:rename',
   unarchiveSession: 'sessions:unarchive',
+  searchSessions: 'sessions:search',
   deleteSession: 'sessions:delete',
   deleteProject: 'sessions:deleteProject',
   startChat: 'chat:start',
@@ -28,8 +29,11 @@ export const INVOKES = {
   listCommands: 'chat:commands',
   listAgents: 'chat:agents',
   warmCache: 'chat:warm',
+  rewindFiles: 'chat:rewindFiles',
+  rewindPoint: 'chat:rewindPoint',
   requestContext: 'chat:context',
   getUsage: 'usage:get',
+  usageAll: 'usage:all',
   usageHistory: 'usage:history',
   checkUpdate: 'app:checkUpdate',
   authStatus: 'auth:status',
@@ -85,6 +89,7 @@ export const INVOKES = {
   workflowSave: 'workflow:save',
   workflowDelete: 'workflow:delete',
   workflowAgents: 'workflow:agents',
+  workflowJournal: 'workflow:journal',
 } as const
 
 /** `ipcRenderer.send` methods (fire and forget). */
@@ -105,6 +110,7 @@ export const EVENTS = {
   onChatExit: 'chat:exit',
   onChatContext: 'chat:context',
   onUsage: 'usage:changed',
+  onUsageAll: 'usage:allChanged',
   onAccountsChanged: 'accounts:changed',
   onCodexUsage: 'codex:usageChanged',
   onSessionsChanged: 'sessions:changed',
@@ -164,4 +170,5 @@ export const SHARED_PREFS: readonly string[] = [
   'projectNames',
   'projectDefaults',
   'recentHours',
+  'projectNotes',
 ]

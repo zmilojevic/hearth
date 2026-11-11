@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { Terminal, Activity, Workflow, ListTree, Loader, Check, X, Ban, Copy } from 'lucide-react'
+import { Terminal, Activity, Workflow, ListTree, Loader, Check, X, Ban, Copy, ChevronRight, ChevronDown } from 'lucide-react'
 import { useStore } from '../store'
 import { useNow } from '../hooks'
 import { fmtDuration, copyText } from '../util'
 import type { BgTask } from '../reduce'
+import type { WfGraph } from '../../../shared/workflow'
+import { projectRoot } from '../util'
+import { runView, useWorkflowJournal } from './workflows/liveRun'
+import type { RunRow } from './workflows/liveRun'
 
 const ENDED_VISIBLE_MS = 10 * 60 * 1000
 // eslint-disable-next-line no-control-regex
@@ -32,6 +36,60 @@ const TYPE_LABEL: Record<string, string> = {
   monitor_mcp: 'Monitor (MCP)',
   monitor_ws: 'Monitor (WebSocket)',
   remote_agent: 'Remote agent',
+}
+
+function StepRow({ row }: { row: RunRow }) {
+  const [open, setOpen] = useState(false)
+  const canOpen = !!row.result
+  return (
+    <div className={`wfl-row ${row.status}`}>
+      <button className="wfl-row-main" disabled={!canOpen} onClick={() => setOpen(!open)}>
+        <span className={`wfl-dot ${row.status}`}>{row.status === 'done' && <Check size={10} />}</span>
+        <span className="wfl-label">{row.label}</span>
+        {canOpen && (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />)}
+      </button>
+      {open && row.result && <pre className="wfl-result">{row.result}</pre>}
+    </div>
+  )
+}
+
+/** Steps of a running workflow, grouped by phase, from the run's journal (+ pending steps from a designer graph). */
+function WorkflowSteps({ chatId, task, running }: { chatId: string; task: BgTask; running: boolean }) {
+  const cwd = useStore((s) => s.chats[chatId]?.cwd)
+  const entries = useWorkflowJournal(task.runDir, running)
+  const [graph, setGraph] = useState<WfGraph | null>(null)
+  useEffect(() => {
+    if (!cwd || !task.workflowName) return
+    let dead = false
+    void (async () => {
+      try {
+        const files = await window.desktop.workflowList(projectRoot(cwd))
+        const f = files.find((x) => x.name === task.workflowName)
+        const r = f && (await window.desktop.workflowRead(f.path))
+        if (!dead) setGraph(r?.graph ?? null)
+      } catch {
+        /* no graph: journal only */
+      }
+    })()
+    return () => {
+      dead = true
+    }
+  }, [cwd, task.workflowName])
+  if (!task.runDir) return null
+  const phases = runView(entries, graph)
+  if (!phases.length) return <div className="wfl muted">Waiting for the first step…</div>
+  return (
+    <div className="wfl">
+      {phases.map((p) => (
+        <div key={p.title} className="wfl-phase">
+          <div className="wfl-phase-title">{p.title || '—'}</div>
+          {p.rows.map((r) => (
+            <StepRow key={r.key} row={r} />
+          ))}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function TaskPopover({ chatId, task, now, onClose }: { chatId: string; task: BgTask; now: number; onClose: () => void }) {
@@ -79,6 +137,7 @@ function TaskPopover({ chatId, task, now, onClose }: { chatId: string; task: BgT
         {TYPE_LABEL[task.type] ?? task.type} · {task.status} · {fmtDuration(Math.max(0, end - task.startedAt))}
         {task.error ? ` · ${task.error}` : ''}
       </div>
+      {task.type === 'local_workflow' && <WorkflowSteps chatId={chatId} task={task} running={running} />}
       <pre
         className="task-pop-out"
         ref={pre}

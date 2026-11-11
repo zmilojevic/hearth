@@ -138,3 +138,26 @@ export async function sessionCwd(sessionId: string): Promise<string | null> {
     return null
   }
 }
+
+/** The `parentUuid` of the user line `userUuid` (the chain entry to fork at to drop that message and all after it); null when it is the first message or not found. */
+export async function rewindPoint(sessionId: string, cwd: string, userUuid: string): Promise<string | null> {
+  try {
+    const rl = createInterface({ input: createReadStream(transcriptPath(sessionId, cwd), { encoding: 'utf8' }), crlfDelay: Infinity })
+    for await (const line of rl) {
+      if (!line.includes(userUuid)) continue
+      let e: any
+      try {
+        e = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (e.uuid === userUuid && e.type === 'user') {
+        rl.close()
+        return typeof e.parentUuid === 'string' ? e.parentUuid : null
+      }
+    }
+  } catch {
+    /* no transcript */
+  }
+  return null
+}

@@ -101,6 +101,18 @@ export type WorkflowSaveResult =
   | { ok: false; error: string }
   | { ok: false; conflict: 'edited' | 'script' | 'exists' }
 
+/** One agent of a running workflow, from the run dir's `journal.jsonl` (`started` + optional `result` line). */
+export interface WorkflowJournalEntry {
+  agentId: string
+  label: string
+  phase: string
+  status: 'running' | 'done'
+  /** Text, or the schema result as pretty JSON; cut at 4 KB. */
+  result?: string
+  startedAt?: number
+  endedAt?: number
+}
+
 export interface WorkflowAgent {
   name: string
   description: string

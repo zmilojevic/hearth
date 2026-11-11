@@ -1,7 +1,7 @@
 import { UserRound } from 'lucide-react'
 import { useStore } from '../store'
 import { isPhone } from '../util'
-import { accountDetail, accountLabel } from '../accounts'
+import { accountDetail, accountLabel, usageSummary, USAGE_STALE_MS } from '../accounts'
 import Dropdown from './Dropdown'
 
 const ADD = '__add'
@@ -13,10 +13,17 @@ export default function AccountSwitcher() {
     const c = s.activeChatId ? s.chats[s.activeChatId] : undefined
     return c && c.engine !== 'codex' ? c.account : undefined
   })
+  const usage = useStore((s) => s.accountUsage)
   if (isPhone || accounts.accounts.length < 2) return null
   const active = accounts.accounts.find((a) => a.id === accounts.active) ?? accounts.accounts[0]
   const options = [
-    ...accounts.accounts.map((a) => ({ value: a.id, label: accountLabel(a), description: accountDetail(a) || undefined })),
+    ...accounts.accounts.map((a) => {
+      const u = usage[a.id]
+      const sum = usageSummary(u)
+      const stale = !!u && Date.now() - u.fetchedAt > USAGE_STALE_MS
+      const desc = [accountDetail(a), sum ? (stale ? `${sum} (old)` : sum) : ''].filter(Boolean).join(' · ')
+      return { value: a.id, label: accountLabel(a), description: desc || undefined }
+    }),
     { value: ADD, label: 'Add account…' },
   ]
   const chatAcc = chatAccount && chatAccount !== accounts.active ? accounts.accounts.find((a) => a.id === chatAccount) : undefined

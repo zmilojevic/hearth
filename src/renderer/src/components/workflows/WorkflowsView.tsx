@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Code, Copy, FileCode, Play, Plus, Save, Trash2, Workflow, X } from 'lucide-react'
+import { Activity, AlertTriangle, ChevronDown, ChevronRight, Code, Copy, FileCode, Play, Plus, Save, Trash2, Workflow, X } from 'lucide-react'
 import { emptyWorkflow, generateWorkflow, validateWorkflow } from '../../../../shared/workflow'
 import type { WfGraph, WorkflowAgent, WorkflowFile, WorkflowScope } from '../../../../shared/workflow'
 import type { ModelChoice } from '../../../../shared/types'
@@ -12,6 +12,7 @@ import Dropdown from '../Dropdown'
 import WorkflowCanvas, { AGENT_MIME } from './WorkflowCanvas'
 import WorkflowInspector from './WorkflowInspector'
 import RunWorkflowDialog from './RunWorkflowDialog'
+import { nodeProgress, taskLive, useLiveRun, useWorkflowJournal } from './liveRun'
 import { deleteStep, findStep, uniqueName } from './graphEdit'
 
 type Doc = Omit<WorkflowDraft, 'selected'>
@@ -99,6 +100,7 @@ export default function WorkflowsView({ root }: { root: string }) {
   const [confirm, setConfirm] = useState<ConfirmSpec | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
+  const [liveOn, setLiveOn] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const refreshList = useCallback(async (): Promise<WorkflowFile[]> => {
@@ -125,6 +127,8 @@ export default function WorkflowsView({ root }: { root: string }) {
 
   const graph = doc?.graph ?? null
   const dirty = !!doc && !!doc.graph && keyOf(doc.scope, doc.graph) !== doc.savedKey
+  const liveRun = useLiveRun(root, doc?.file?.name)
+  const journal = useWorkflowJournal(liveOn ? liveRun?.task.runDir : undefined, !!liveRun && taskLive(liveRun.task))
   const issues = useMemo(() => (graph && doc ? validateWorkflow(graph, agents ?? undefined, doc.scope) : []), [graph, agents, doc?.scope])
   const errors = issues.filter((i) => i.level === 'error').length
   const warnings = issues.length - errors
@@ -413,6 +417,11 @@ export default function WorkflowsView({ root }: { root: string }) {
                 <button className="btn primary" disabled={readOnly || errors > 0 || busy || (!dirty && !!doc.file)} title={errors > 0 ? 'Fix the errors first' : 'Save (Ctrl+S)'} onClick={() => void save()}>
                   <Save size={13} /> Save
                 </button>
+                {liveRun && graph && (
+                  <button className={`btn${liveOn ? ' on' : ''}`} title={dirty ? 'Save first: the run used the saved graph' : 'Show the status of the latest run on the canvas'} disabled={dirty} onClick={() => setLiveOn(!liveOn)}>
+                    <Activity size={13} /> Live run
+                  </button>
+                )}
                 <button className={`btn${showCode ? ' on' : ''}`} onClick={() => setShowCode(!showCode)}>
                   <Code size={13} /> Code
                 </button>
@@ -462,6 +471,7 @@ export default function WorkflowsView({ root }: { root: string }) {
                     selected={selected}
                     onSelect={setSelected}
                     onChange={setGraph}
+                    live={liveOn && graph && !dirty ? nodeProgress(graph, journal) : null}
                   />
                 )}
                 {graph && (

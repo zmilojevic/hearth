@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, Square, Eraser, X, Clock, ImagePlus, CornerDownLeft, Flame, Snowflake, File, Folder, Smartphone } from 'lucide-react'
 import Dropdown from './Dropdown'
 import ImageThumb from './ImageThumb'
+import ScheduleButton, { scheduleLabel } from './ScheduleButton'
 import TasksStrip from './TasksStrip'
 import { AgentsMdCard } from './CodexCards'
 import { useStore, isGeneral, codexInstalled } from '../store'
@@ -130,6 +131,7 @@ export default function Composer({ chatId }: { chatId: string }) {
   const metaEffort = useStore((s) => (chat?.sessionId ? s.meta[chat.sessionId]?.effort : undefined))
   const sendMessage = useStore((s) => s.sendMessage)
   const enqueue = useStore((s) => s.enqueue)
+  const schedule = useStore((s) => s.schedule)
   const removeQueued = useStore((s) => s.removeQueued)
   const sendQueuedNow = useStore((s) => s.sendQueuedNow)
   const addAttachments = useStore((s) => s.addAttachments)
@@ -481,8 +483,9 @@ export default function Composer({ chatId }: { chatId: string }) {
               <span className="queued-text" title={q.text}>
                 {q.text || 'Image'}
               </span>
+              {(q.sendAt !== undefined || q.afterReset) && <span className="queued-meta">{q.afterReset ? 'after limit reset' : `\u23F1 ${scheduleLabel(q.sendAt!)}`}</span>}
               {q.images.length > 0 && <span className="queued-meta">{q.images.length === 1 ? '1 image' : `${q.images.length} images`}</span>}
-              <button className="queued-btn" title={`Send now: Claude folds it into the running turn (${modLabel('Ctrl+Enter')} in an empty composer)`} onClick={() => void sendQueuedNow(chatId, q.id)}>
+              <button className="queued-btn" title={q.sendAt !== undefined || q.afterReset ? 'Send now' : `Send now: Claude folds it into the running turn (${modLabel('Ctrl+Enter')} in an empty composer)`} onClick={() => void sendQueuedNow(chatId, q.id)}>
                 <CornerDownLeft size={12} /> Send now
               </button>
               <button className="queued-x" title="Remove from queue" onClick={() => removeQueued(chatId, q.id)}>
@@ -772,6 +775,9 @@ export default function Composer({ chatId }: { chatId: string }) {
             <button className="icon-btn" title={`Clear the conversation (/clear, ${modLabel('Ctrl+L')} / ${modLabel('Alt+Delete')})`} onClick={() => void clearChat(chatId)}>
               <Eraser size={16} />
             </button>
+          )}
+          {!isPhone && !codex && !!chat.sessionId && draft.trim().length > 0 && chat.attachments.length === 0 && !draft.trim().startsWith('/') && (
+            <ScheduleButton onPick={(when) => schedule(chatId, draft.trim(), when)} />
           )}
           {busy && hasContent && (
             <button className="send queue-btn" title={`Queue message (Enter; ${modLabel('Ctrl+Enter')} sends now)`} onClick={() => submit()}>

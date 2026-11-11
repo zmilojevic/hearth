@@ -7,10 +7,7 @@ import { AlertTriangle, Bot, Info } from 'lucide-react'
 import { subagentLine } from './ToolCard'
 import { useNow } from '../hooks'
 import { CodexLoginCard } from './CodexCards'
-import { accountLabel, limitPressure, loggedInAccounts } from '../accounts'
-
-/** A plan/usage limit hit (assistant `error` field or a result error text). */
-const RATE_LIMIT = /hit your (usage )?limit|usage limit|rate.?limit/i
+import { RATE_LIMIT, accountLabel, limitPressure, loggedInAccounts, tokensText } from '../accounts'
 
 /** "1h 20m" until a future timestamp. */
 function untilText(ts: number): string {
@@ -73,6 +70,7 @@ export default function ChatView({ chatId }: { chatId: string }) {
     return c?.engine === 'codex' && !!c.error && /already has an active writer/i.test(c.error)
   })
   const accounts = useStore((s) => s.accounts)
+  const codexReady = useStore((s) => !!s.codexStatus?.installed && s.codexStatus.loggedIn)
   const claudeUsage = useStore((s) => s.claudeUsage)
   const switchAt = useStore((s) => s.accountSwitchAt)
   const resumeOnSwitch = useStore((s) => s.resumeOnSwitch)
@@ -106,6 +104,7 @@ export default function ChatView({ chatId }: { chatId: string }) {
   const orphanPending = chat.pending.filter((p) => !chat.messages.some((m) => m.blocks.some((b) => b.kind === 'tool_use' && b.id === p.toolUseID)))
   const busy = chat.status === 'running' || chat.status === 'compacting'
   const others = loggedInAccounts(accounts).filter((a) => a.id !== (chat.account ?? accounts.active))
+  const handoffTo = codexReady ? (chat.engine === 'codex' ? 'claude' : 'codex') : null
   const errorOffersSwitch = !!chat.error && !writerBusy && RATE_LIMIT.test(chat.error)
   const pressure =
     chat.engine !== 'codex' && !isPhone && switchAt > 0 && others.length > 0 && chat.status === 'idle' && !errorOffersSwitch
@@ -115,6 +114,8 @@ export default function ChatView({ chatId }: { chatId: string }) {
   const limitKey = pressure ? `${chatAccount}:${pressure.window}` : ''
   const dismissedAt = limitKey ? limitDismissed[limitKey] : undefined
   const showSwitchNote = !!pressure && !(dismissedAt !== undefined && (pressure.percent < 100 || dismissedAt >= 100))
+  const ctxTokens = chat.context?.totalTokens ?? 0
+  const costHint = ctxTokens > 0 ? `~${tokensText(ctxTokens)} tokens will be re-read on the new account (its cache starts empty)` : ''
   const chatAccountLabel = accountLabel(accounts.accounts.find((a) => a.id === chatAccount) ?? { id: chatAccount })
 
   return (
@@ -187,6 +188,19 @@ export default function ChatView({ chatId }: { chatId: string }) {
                     Continue with {accountLabel(a)}
                   </button>
                 ))}
+            {!general && RATE_LIMIT.test(chat.error) && handoffTo && (
+              <button
+                className="btn"
+                title={`Start a new ${handoffTo === 'codex' ? 'Codex' : 'Claude'} chat in this folder with a condensed copy of this conversation`}
+                onClick={() => {
+                  void useStore.getState().handoffChat(chatId, handoffTo)
+                  focusComposerSoon()
+                }}
+              >
+                Continue in {handoffTo === 'codex' ? 'Codex' : 'Claude'}
+              </button>
+            )}
+            {costHint && chat.engine !== 'codex' && !isPhone && RATE_LIMIT.test(chat.error) && <span className="muted small switch-cost">{costHint}</span>}
           </div>
         )}
         {showSwitchNote && pressure && (
@@ -207,6 +221,21 @@ export default function ChatView({ chatId }: { chatId: string }) {
                 Continue with {accountLabel(a)}
               </button>
             ))}
+            {ctxTokens >= 50_000 &&
+              others.map((a) => (
+                <button
+                  key={`c-${a.id}`}
+                  className="btn"
+                  title={`Run /compact first so less context has to be re-read, then switch this chat to ${accountLabel(a)}`}
+                  onClick={() => {
+                    void useStore.getState().compactThenSwitch(chatId, a.id)
+                    focusComposerSoon()
+                  }}
+                >
+                  Compact, then switch{others.length > 1 ? ` to ${accountLabel(a)}` : ''}
+                </button>
+              ))}
+            {costHint && <span className="muted small switch-cost">{costHint}</span>}
             <button className="btn" onClick={() => useStore.getState().dismissLimitPrompt(limitKey, pressure.percent)}>
               Not now
             </button>

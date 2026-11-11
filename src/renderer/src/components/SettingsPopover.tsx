@@ -101,6 +101,8 @@ export default function SettingsPopover() {
   const setNotifications = useStore((s) => s.setNotifications)
   const notifySound = useStore((s) => s.notifySound)
   const setNotifySound = useStore((s) => s.setNotifySound)
+  const awaySummary = useStore((s) => s.awaySummary)
+  const setAwaySummary = useStore((s) => s.setAwaySummary)
   const skillsCorner = useStore((s) => s.skillsCorner)
   const setSkillsCorner = useStore((s) => s.setSkillsCorner)
   const updateCheck = useStore((s) => s.updateCheck)
@@ -220,6 +222,17 @@ export default function SettingsPopover() {
                   if (!notifySound) playChime('done')
                 }}
               >
+                <span className="knob" />
+              </button>
+            </label>
+          )}
+          {!isPhone && (
+            <label className="toggle-row">
+              <span className="toggle-text">
+                <span>Summary when returning</span>
+                <span className="muted small">What finished while the window was away for 30+ min</span>
+              </span>
+              <button type="button" role="switch" aria-checked={awaySummary} className={`switch ${awaySummary ? 'on' : ''}`} onClick={() => setAwaySummary(!awaySummary)}>
                 <span className="knob" />
               </button>
             </label>

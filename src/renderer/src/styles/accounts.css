@@ -135,3 +135,6 @@
   padding: 4px 2px;
   font-size: 13px;
 }
+.switch-cost {
+  flex-basis: 100%;
+}

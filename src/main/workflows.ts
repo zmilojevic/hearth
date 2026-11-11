@@ -1,9 +1,10 @@
-import { join, resolve, basename, dirname, isAbsolute } from 'node:path'
+import { join, resolve, basename, dirname, isAbsolute, sep } from 'node:path'
 import { homedir } from 'node:os'
-import { readdir, readFile, writeFile, rename, rm, stat, mkdir } from 'node:fs/promises'
+import { readdir, readFile, writeFile, rename, rm, stat, mkdir, realpath } from 'node:fs/promises'
+import { listAccounts, accountConfigDir } from './accounts'
 import { withIdleQuery } from './agent'
 import { parseWorkflowFile, generateWorkflow } from '../shared/workflow'
-import type { WorkflowFile, WorkflowReadResult, WorkflowSaveRequest, WorkflowSaveResult, WorkflowAgent, WorkflowScope } from '../shared/workflow'
+import type { WorkflowJournalEntry, WorkflowFile, WorkflowReadResult, WorkflowSaveRequest, WorkflowSaveResult, WorkflowAgent, WorkflowScope } from '../shared/workflow'
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/
 
@@ -171,5 +172,88 @@ export async function workflowAgents(root: string, log: (s: string) => void): Pr
     return []
   } finally {
     clearTimeout(timer)
+  }
+}
+
+// ---- live run journal
+
+const RESULT_MAX = 4096
+const journalCache = new Map<string, { mtime: number; size: number; entries: WorkflowJournalEntry[] }>()
+
+/** `~/…` expanded, then the real path; only a `wf_*` dir inside a projects dir (default or account config) is accepted. */
+async function allowedRunDir(dir: unknown): Promise<string | null> {
+  if (typeof dir !== 'string' || !dir) return null
+  const raw = dir.startsWith('~/') ? join(homedir(), dir.slice(2)) : dir
+  if (!isAbsolute(raw)) return null
+  let real: string
+  try {
+    real = await realpath(resolve(raw))
+  } catch {
+    return null
+  }
+  if (!/^wf_[^/\\]+$/.test(basename(real)) || basename(dirname(real)) !== 'workflows' || basename(dirname(dirname(real))) !== 'subagents') return null
+  const bases = new Set<string>([join(configDir(), 'projects')])
+  try {
+    for (const a of listAccounts().accounts) bases.add(join(accountConfigDir(a.id), 'projects'))
+  } catch {
+    /* accounts unreadable: default only */
+  }
+  for (const b of bases) {
+    try {
+      const rb = await realpath(b)
+      if (real.startsWith(rb + sep)) return real
+    } catch {
+      /* missing projects dir */
+    }
+  }
+  return null
+}
+
+export async function workflowJournal(dir: string): Promise<WorkflowJournalEntry[]> {
+  try {
+    const run = await allowedRunDir(dir)
+    if (!run) return []
+    const file = join(run, 'journal.jsonl')
+    const st = await stat(file)
+    const hit = journalCache.get(file)
+    if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return hit.entries
+    const text = await readFile(file, 'utf8')
+    const byId = new Map<string, WorkflowJournalEntry>()
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue
+      let e: any
+      try {
+        e = JSON.parse(line)
+      } catch {
+        continue
+      }
+      const id = typeof e?.agentId === 'string' ? e.agentId : ''
+      if (!id) continue
+      if (e.type === 'started') {
+        byId.set(id, { agentId: id, label: String(e.label ?? ''), phase: String(e.phase ?? ''), status: 'running' })
+      } else if (e.type === 'result') {
+        const cur: WorkflowJournalEntry = byId.get(id) ?? { agentId: id, label: '', phase: '', status: 'running' }
+        let r = typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? null, null, 2)
+        if (r.length > RESULT_MAX) r = r.slice(0, RESULT_MAX) + '…'
+        cur.status = 'done'
+        cur.result = r
+        byId.set(id, cur)
+      }
+    }
+    const entries = [...byId.values()]
+    await Promise.all(
+      entries.map(async (e) => {
+        try {
+          e.startedAt = (await stat(join(run, `agent-${e.agentId}.meta.json`))).mtimeMs
+          if (e.status === 'done') e.endedAt = (await stat(join(run, `agent-${e.agentId}.jsonl`))).mtimeMs
+        } catch {
+          /* no per-agent files */
+        }
+      }),
+    )
+    journalCache.set(file, { mtime: st.mtimeMs, size: st.size, entries })
+    return entries
+  } catch {
+    return []
   }
 }

@@ -1,9 +1,9 @@
 import type React from 'react'
 import { Fragment, useMemo, useRef, useState, useEffect } from 'react'
-import { Plus, Search, Clock, FolderGit2, FolderPlus, ChevronRight, Pencil, Trash2, GitFork, FolderOpen, Pin, PinOff, MessageSquarePlus, ChevronsDownUp, ChevronsUpDown, XCircle, FolderX, Flame, Snowflake, Check, MessageCircle, GitBranchPlus, Code, SquareTerminal, Smartphone, SlidersHorizontal, Workflow, Archive, ArchiveRestore } from 'lucide-react'
+import { Plus, Search, Clock, FolderGit2, FolderPlus, ChevronRight, Pencil, Trash2, GitFork, FolderOpen, Pin, PinOff, MessageSquarePlus, ChevronsDownUp, ChevronsUpDown, XCircle, FolderX, Flame, Snowflake, Check, MessageCircle, GitBranchPlus, Code, SquareTerminal, Smartphone, SlidersHorizontal, Workflow, Archive, ArchiveRestore, StickyNote, ArrowRightLeft } from 'lucide-react'
 import { openFolderInEditor, openTerminalAt } from '../openIn'
 import { useStore, KEEP_WARM_MAX_IDLE_MS, isGeneral, engineFor } from '../store'
-import { EFFORT_LEVELS, type SessionSummary, type LiveChat, type ModelChoice, type Engine } from '@shared/types'
+import { EFFORT_LEVELS, type MessageHit, type SessionSummary, type LiveChat, type ModelChoice, type Engine } from '@shared/types'
 import { latestModels, projectName, projectRoot, worktreeOf, relativeTime, shortPath, modelLabel, defaultContextWindow, fmtTokens, fmtElapsed, isMac, isPhone } from '../util'
 import type { Subagent } from '../reduce'
 import { useNow } from '../hooks'
@@ -120,6 +120,10 @@ export default function Sidebar() {
   const projectNames = useStore((s) => s.projectNames)
   const renameProject = useStore((s) => s.renameProject)
   const [defaultsFor, setDefaultsFor] = useState<{ cwd: string; name: string } | null>(null)
+  const projectNotes = useStore((s) => s.projectNotes)
+  const setProjectNote = useStore((s) => s.setProjectNote)
+  const codexReady = useStore((s) => !!s.codexStatus?.installed && s.codexStatus.loggedIn)
+  const [noteFor, setNoteFor] = useState<{ cwd: string; name: string; text: string } | null>(null)
   const [renamingProject, setRenamingProject] = useState<{ cwd: string; name: string } | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
@@ -250,6 +254,42 @@ export default function Sidebar() {
   }, [sessions, chats, search, recentHours, pinnedProjects, projectOrder, projectNames, hiddenSessions, showArchived, sessionSortTime, generalDir])
   const groups = useMemo(() => allGroups.filter((g) => !g.general), [allGroups])
   // Exit transitions: removed rows / projects stay (leaving) until their collapse animation has run.
+  // Full-text hits in message bodies (debounced; stale answers dropped by the sequence number).
+  const [hits, setHits] = useState<MessageHit[]>([])
+  const hitSeq = useRef(0)
+  useEffect(() => {
+    const q = search.trim()
+    const seq = ++hitSeq.current
+    if (q.length < 3) {
+      setHits([])
+      return
+    }
+    const t = setTimeout(() => {
+      window.desktop
+        .searchSessions(q, 50)
+        .then((r) => {
+          if (seq === hitSeq.current) setHits(r)
+        })
+        .catch(() => {})
+    }, 250)
+    return () => clearTimeout(t)
+  }, [search])
+  const shownHits = useMemo(() => {
+    if (search.trim().length < 3) return []
+    const hidden = new Set(hiddenSessions)
+    const byId = new Map(sessions.map((x) => [x.sessionId, x]))
+    const out: { h: MessageHit; s: SessionSummary }[] = []
+    for (const h of hits) {
+      const s = byId.get(h.sessionId)
+      if (!s || (!showArchived && (hidden.has(s.sessionId) || s.archived))) continue
+      out.push({ h, s })
+    }
+    return out
+  }, [hits, sessions, hiddenSessions, showArchived, search])
+  const openHit = (s: SessionSummary): void => {
+    const q = search.trim()
+    void openSession(s).then(() => setTimeout(() => useStore.getState().openFind(q), 60))
+  }
   const exitReset = search + '|' + recentHours + '|' + showArchived
   const shownGroups = useExitList(allGroups, (g) => g.cwd, { resetKey: exitReset })
   const shownRows = useExitList(
@@ -443,6 +483,17 @@ export default function Sidebar() {
     const t = renaming.title.trim()
     setRenaming(null)
     if (t) await renameSession(renaming.s, t)
+  }
+  const commitNote = (): void => {
+    if (!noteFor) return
+    setProjectNote(noteFor.cwd, noteFor.text)
+    setNoteFor(null)
+  }
+  const handoff = async (s: SessionSummary): Promise<void> => {
+    const find = (): Chat | undefined => Object.values(useStore.getState().chats).find((c) => c.sessionId === s.sessionId && !c.closed)
+    if (!find()) await openSession(s, false, true)
+    const c = find()
+    if (c) void useStore.getState().handoffChat(c.chatId, c.engine === 'codex' ? 'claude' : 'codex')
   }
   const commitRenameProject = (): void => {
     if (!renamingProject) return
@@ -749,7 +800,7 @@ export default function Sidebar() {
 
       <div className="sidebar-scroll" ref={scrollRef} onKeyDown={onListKey}>
         {!loaded && <div className="muted pad">Loading sessions…</div>}
-        {loaded && allGroups.length === 0 && (
+        {loaded && allGroups.length === 0 && shownHits.length === 0 && (
           <div className="muted pad">
             {search ? 'No sessions match.' : recentHours > 0 ? `No sessions in the last ${recentHours} hours.` : 'No sessions found.'}
           </div>
@@ -811,6 +862,7 @@ export default function Sidebar() {
                 {g.general ? <MessageCircle size={14} /> : g.pinned ? <Pin size={13} className="pin-icon" /> : <FolderGit2 size={14} />}
                 <span className="group-title">
                   <span className="group-name">{g.name}</span>
+                  {!g.general && projectNotes[g.cwd] && <span className="group-note" title={projectNotes[g.cwd].split('\n')[0].slice(0, 120)}><StickyNote size={11} /></span>}
                   {isCollapsed && g.sessions.length > 0 && <span className="count">({g.sessions.length})</span>}
                 </span>
                 {isCollapsed && groupDot(g) && <span className={`dot ${groupDot(g)}`} title={DOT_TITLE[groupDot(g)!]} />}
@@ -877,6 +929,46 @@ export default function Sidebar() {
             </div>
           )
         })}
+
+        {shownHits.length > 0 && (
+          <>
+            <div className="msg-hits-head">In messages</div>
+            {shownHits.map(({ h, s }) => {
+              const q = search.trim()
+              const at = h.snippet.toLowerCase().indexOf(q.toLowerCase())
+              return (
+                <button key={h.sessionId} className="row msg-hit" data-hit={h.sessionId} onClick={() => openHit(s)} title={h.count > 1 ? `${h.count} messages match` : undefined}>
+                  <div className="row-line">
+                    <span className="dot slot" />
+                    <span className="row-title">{s.customTitle || s.summary || s.firstPrompt || 'Untitled'}</span>
+                    <span className="row-time">{relativeTime(h.timestamp)}</span>
+                  </div>
+                  <div className="row-line">
+                    <span className="dot slot" />
+                    <span className="msg-hit-proj">
+                      {s.cwd === generalDir ? 'Chats' : projectName(projectNames, projectRoot(s.cwd ?? h.cwd))}
+                      {h.count > 1 ? ` · ${h.count} matches` : ''}
+                    </span>
+                  </div>
+                  <div className="row-line">
+                    <span className="dot slot" />
+                    <span className="msg-hit-snip">
+                      {at < 0 ? (
+                        h.snippet
+                      ) : (
+                        <>
+                          {h.snippet.slice(0, at)}
+                          <b>{h.snippet.slice(at, at + q.length)}</b>
+                          {h.snippet.slice(at + q.length)}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </button>
+              )
+            })}
+          </>
+        )}
       </div>
 
       {menu && (
@@ -921,6 +1013,14 @@ export default function Sidebar() {
             >
               <Smartphone size={14} /> Remote control
               {remoteSessions.includes(menu.s.sessionId) && <Check size={14} style={{ marginLeft: 'auto' }} />}
+            </button>
+          )}
+          {codexReady && !isGeneral(menu.s.cwd) && (onDisk.has(menu.s.sessionId) || openBySession[menu.s.sessionId]) && (
+            <button onClick={() => {
+              setMenu(null)
+              void handoff(menu.s)
+            }}>
+              <ArrowRightLeft size={14} /> {menu.s.engine === 'codex' ? 'Continue in Claude' : 'Continue in Codex'}
             </button>
           )}
           {(menu.s.archived || hiddenSessions.includes(menu.s.sessionId)) && (
@@ -1026,6 +1126,11 @@ export default function Sidebar() {
           <button onClick={() => { setRenamingProject({ cwd: groupMenu.g.cwd, name: groupMenu.g.name }); setGroupMenu(null) }}>
             <Pencil size={14} /> Rename project…
           </button>
+          {!groupMenu.g.general && (
+            <button onClick={() => { setNoteFor({ cwd: groupMenu.g.cwd, name: groupMenu.g.name, text: projectNotes[groupMenu.g.cwd] ?? '' }); setGroupMenu(null) }}>
+              <StickyNote size={14} /> Project note…
+            </button>
+          )}
           {!groupMenu.g.general && (
             <button onClick={() => { setDefaultsFor({ cwd: groupMenu.g.cwd, name: groupMenu.g.name }); setGroupMenu(null) }}>
               <SlidersHorizontal size={14} /> Default model &amp; effort…
@@ -1183,6 +1288,40 @@ export default function Sidebar() {
               </button>
               <button className="btn primary" onClick={commitRenameProject}>
                 Rename
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {noteFor && (
+        <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setNoteFor(null)}>
+          <div className="modal rename-modal">
+            <div className="modal-head">
+              <h3>Project note · {noteFor.name}</h3>
+            </div>
+            <textarea
+              className="note-text"
+              autoFocus
+              value={noteFor.text}
+              placeholder="Instructions appended to the system prompt of every Claude chat in this project"
+              onChange={(e) => setNoteFor({ ...noteFor, text: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault()
+                  commitNote()
+                } else if (e.key === 'Escape') {
+                  e.stopPropagation()
+                  setNoteFor(null)
+                }
+              }}
+            />
+            <p className="modal-text muted">Applies to chats started or resumed after saving; changing it invalidates the prompt cache once. Leave empty to remove the note.</p>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setNoteFor(null)}>
+                Cancel
+              </button>
+              <button className="btn primary" onClick={commitNote}>
+                Save
               </button>
             </div>
           </div>

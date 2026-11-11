@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Plus, X } from 'lucide-react'
 import { useStore } from '../store'
 import Dropdown from './Dropdown'
-import { accountDetail, accountLabel } from '../accounts'
+import { accountDetail, accountLabel, usageSummary, USAGE_STALE_MS } from '../accounts'
 import type { AccountInfo } from '@shared/types'
 
 /** Confirms removing an extra account (its login only; chats and history are shared and stay). */
@@ -50,6 +50,8 @@ export default function AccountsSection() {
   const accounts = useStore((s) => s.accounts)
   const switchAt = useStore((s) => s.accountSwitchAt)
   const resumeOnSwitch = useStore((s) => s.resumeOnSwitch)
+  const autoSwitch = useStore((s) => s.autoSwitchAccount)
+  const usage = useStore((s) => s.accountUsage)
   const [removing, setRemoving] = useState<AccountInfo | null>(null)
   return (
     <div className="accounts-section">
@@ -62,6 +64,11 @@ export default function AccountsSection() {
             <span className="account-text">
               <span className="account-name">{accountLabel(a)}</span>
               {detail && <span className="muted small account-detail">{detail}</span>}
+              {usageSummary(usage[a.id]) && (
+                <span className="muted small account-detail" style={usage[a.id] && Date.now() - usage[a.id]!.fetchedAt > USAGE_STALE_MS ? { opacity: 0.5 } : undefined} title="Plan usage (5-hour session · weekly)">
+                  {usageSummary(usage[a.id])}
+                </span>
+              )}
             </span>
             {active && <span className="account-active muted small">active</span>}
             {a.id !== 'default' && (
@@ -111,6 +118,22 @@ export default function AccountsSection() {
             aria-checked={resumeOnSwitch}
             className={`switch ${resumeOnSwitch ? 'on' : ''}`}
             onClick={() => useStore.getState().setResumeOnSwitch(!resumeOnSwitch)}
+          >
+            <span className="knob" />
+          </button>
+        </label>
+      )}
+      {accounts.accounts.length >= 2 && (
+        <label className="toggle-row">
+          <span className="toggle-text">
+            <span>Switch automatically when a limit is hit</span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoSwitch}
+            className={`switch ${autoSwitch ? 'on' : ''}`}
+            onClick={() => useStore.getState().setAutoSwitchAccount(!autoSwitch)}
           >
             <span className="knob" />
           </button>

@@ -1,0 +1,111 @@
+/* Live per-step status of a running workflow: task popover list and designer canvas badges. */
+.wfl {
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.wfl-phase-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.wfl-row-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 1px 0;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wfl-row-main:disabled {
+  cursor: default;
+}
+.wfl-row.pending .wfl-row-main {
+  color: var(--muted);
+  opacity: 0.6;
+}
+.wfl-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wfl-dot,
+.wf-live-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.wfl-dot.pending,
+.wf-live-dot.pending {
+  border: 1px solid var(--border-2);
+}
+.wfl-dot.running,
+.wf-live-dot.running {
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.wfl-dot.done svg {
+  width: 10px;
+  height: 10px;
+}
+.wfl-result {
+  margin: 3px 0 4px 17px;
+  padding: 6px 8px;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11.5px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .wfl-dot.running,
+  .wf-live-dot.running {
+    animation: none;
+  }
+}
+
+/* designer canvas */
+.wf-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.wf-live-badge.done {
+  color: var(--text-2);
+}
+.wf-card.live-running,
+.wf-stage.live-running {
+  border-color: var(--accent-muted);
+}
+.wf-card.live-pending {
+  opacity: 0.65;
+}
+.wf-stage .wf-live-dot {
+  margin-left: 4px;
+}

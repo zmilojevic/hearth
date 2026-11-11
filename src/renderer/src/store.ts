@@ -5,7 +5,9 @@ import { applySdkMessage, applyTranscript, emptyModel, restoreLive, restoreBackg
 import type { WfGraph, WorkflowFile, WorkflowReadResult, WorkflowScope } from '../../shared/workflow'
 import type { ImageAttachment } from './images'
 import { basename, projectRoot, isPhone } from './util'
+import { RATE_LIMIT, accountLabel, pickAutoSwitchAccount } from './accounts'
 import { playChime } from './sound'
+import { handoffText } from './handoff'
 import { SHARED_PREFS } from '../../shared/channels'
 import { ensureTerminal, disposeTerminal, terminalExited, whenTerminalReady, pasteToTerminal, focusTerminal } from './terminals'
 
@@ -23,6 +25,32 @@ export interface QueuedMessage {
   id: string
   text: string
   images: ImageAttachment[]
+  /** Scheduled send: due at this time (ms) ... */
+  sendAt?: number
+  /** ... or once the chat account's exhausted limit window has reset. Scheduled items are skipped by the post-result queue flush. */
+  afterReset?: boolean
+}
+
+/** Persisted scheduled message (pref `scheduled`, keyed by session id; text only). */
+export interface ScheduledItem {
+  id: string
+  text: string
+  sendAt?: number
+  afterReset?: boolean
+  cwd: string
+  title: string
+}
+
+/** One chat in the "While you were away" card. */
+export interface AwayItem {
+  chatId: string
+  title: string
+  cwd: string
+  status: 'finished' | 'error' | 'ask'
+  error?: string
+  durationMs: number
+  outputTokens: number
+  files: number
 }
 
 /** A note anchored to a diff line in the changes panel, sent to Claude in one batch. */
@@ -116,6 +144,8 @@ interface State {
   projectOrder: string[]
   /** Custom display names (cwd -> name); the folder on disk is never renamed. */
   projectNames: Record<string, string>
+  /** Free text per project root, appended to the system prompt of its Claude chats (shared pref). */
+  projectNotes: Record<string, string>
   /** Session ids replaced by a /clear: transcript kept on disk, never listed in the sidebar. */
   hiddenSessions: string[]
   /** Sidebar lists archived chats too (cleared with /clear, archived in Codex). Per device. */
@@ -159,6 +189,13 @@ interface State {
   setAccountSwitchAt(v: number): void
   resumeOnSwitch: boolean
   setResumeOnSwitch(v: boolean): void
+  /** Switch a chat to another logged-in account on its own when a rate limit ends its turn (desktop). */
+  autoSwitchAccount: boolean
+  setAutoSwitchAccount(v: boolean): void
+  /** Cached plan usage per account id, kept current via usage:allChanged. */
+  accountUsage: Record<string, PlanUsage | null>
+  /** /compact the chat, wait for it to finish, then restart it on `account` (no resume). */
+  compactThenSwitch(chatId: string, account: string): Promise<void>
   /** Active account's plan usage (desktop), kept current via usage:changed. */
   claudeUsage: PlanUsage | null
   /** In-memory: `${account}:${window}` -> percent when the user dismissed the switch offer. */
@@ -214,7 +251,7 @@ interface State {
   /** Open a session in a tab; `background` leaves the active chat alone (startup restore). */
   openSession(s: SessionSummary, fork?: boolean, background?: boolean): Promise<void>
   /** `engine` defaults to the project's default engine; Codex chats take `codexMode` (default: last used). */
-  newChat(opts: { cwd: string; model?: string; permissionMode: PermissionMode; engine?: Engine; codexMode?: CodexMode }): Promise<void>
+  newChat(opts: { cwd: string; model?: string; permissionMode: PermissionMode; engine?: Engine; codexMode?: CodexMode }): Promise<string>
   /** A general chat (no project folder) with the last-used model, effort and mode. */
   newGeneralChat(): Promise<void>
   activate(chatId: string | null): void
@@ -241,10 +278,21 @@ interface State {
   killTerminal(id: string): void
   setActiveTerminal(cwd: string, id: string): void
   clearChat(chatId: string): Promise<void>
+  /** "Edit from here": drop a user message and everything after it (Claude chats; forks the session before it) and put its text back in the composer. */
+  rewindChat(chatId: string, userMsgId: string, opts: { restoreFiles: boolean }): Promise<void>
   setKeepWarm(sessionId: string, on: boolean): void
   /** Remote Control (claude.ai/code, mobile app) for a session; project chats only. */
   setRemote(sessionId: string, on: boolean): void
   tickKeepWarm(): Promise<void>
+  /** Queue the draft-less message for later (time or limit reset); the composer is cleared by the caller. */
+  schedule(chatId: string, text: string, when: { sendAt?: number; afterReset?: boolean }): void
+  /** Send due scheduled messages of idle chats. */
+  tickScheduled(): void
+  /** Summary card shown when returning after a long absence. */
+  awaySummary: boolean
+  setAwaySummary(v: boolean): void
+  awayCard: AwayItem[] | null
+  dismissAway(): void
   sendMessage(chatId: string, text: string, images?: ImageAttachment[], fromDraft?: boolean): Promise<void>
   /** Queue a message; fromDraft (default) also clears the composer. */
   enqueue(chatId: string, text: string, images: ImageAttachment[], fromDraft?: boolean): void
@@ -294,6 +342,15 @@ interface State {
   setProjectDefaults(root: string, d: ProjectDefaults | null): void
   /** Display name only; empty or the folder name resets it. */
   renameProject(cwd: string, name: string): void
+  /** Empty text removes the note. */
+  setProjectNote(root: string, text: string): void
+  /** Prefill for the next FindBar mount, and a counter that remounts it. */
+  findQuery: string
+  findSeq: number
+  /** Opens the in-chat find bar with a query (used by the sidebar's message search). */
+  openFind(query: string): void
+  /** Continue a chat in the other engine: sends a condensed transcript as the first message of a new chat in the same folder. */
+  handoffChat(chatId: string, engine: Engine): Promise<void>
 }
 
 const prefs = {
@@ -460,6 +517,9 @@ export const useStore = create<State>()(
     pinnedProjects: prefs.get<string[]>('pinnedProjects', []),
     projectOrder: prefs.get<string[]>('projectOrder', []),
     projectNames: prefs.get<Record<string, string>>('projectNames', {}),
+    projectNotes: prefs.get<Record<string, string>>('projectNotes', {}),
+    findQuery: '',
+    findSeq: 0,
     hiddenSessions: prefs.get<string[]>('hiddenSessions', []),
     showArchived: prefs.get<boolean>('showArchived', false),
     sessionSortTime: prefs.get<Record<string, number>>('sessionSortTime', {}),
@@ -510,12 +570,40 @@ export const useStore = create<State>()(
     lastCwd: prefs.get('lastCwd', ''),
     notifications: prefs.get('notifications', true),
     notifySound: prefs.get('notifySound', true),
+    awaySummary: prefs.get('awaySummary', true),
+    awayCard: null,
     accountSwitchAt: prefs.get('accountSwitchAt', 90),
     setAccountSwitchAt(v) {
       prefs.set('accountSwitchAt', v)
       set((s) => {
         s.accountSwitchAt = v
       })
+    },
+    autoSwitchAccount: prefs.get('autoSwitchAccount', false),
+    setAutoSwitchAccount(v) {
+      prefs.set('autoSwitchAccount', v)
+      set((s) => {
+        s.autoSwitchAccount = v
+      })
+    },
+    accountUsage: {},
+    async compactThenSwitch(chatId, account) {
+      const c0 = get().chats[chatId]
+      if (isPhone || !c0 || c0.engine === 'codex' || c0.status === 'running' || c0.status === 'compacting') return
+      await get().sendMessage(chatId, '/compact')
+      // Wait for the compaction turn to end (status back to idle), at most 5 minutes.
+      const t0 = Date.now()
+      let started = false
+      while (Date.now() - t0 < 5 * 60_000) {
+        await new Promise((r) => setTimeout(r, 400))
+        const c = get().chats[chatId]
+        if (!c || c.closed) return
+        if (c.status === 'running' || c.status === 'compacting') started = true
+        else if (c.status === 'idle' && (started || Date.now() - t0 > 20_000)) break
+      }
+      const c = get().chats[chatId]
+      if (!c || c.closed || c.status !== 'idle' || c.error) return
+      await get().continueWithAccount(chatId, account)
     },
     resumeOnSwitch: prefs.get('resumeOnSwitch', true),
     setResumeOnSwitch(v) {
@@ -617,6 +705,7 @@ export const useStore = create<State>()(
         }
       }
       tabsRestored = true
+      await restoreScheduled()
     },
 
     async loadMeta(items) {
@@ -753,6 +842,7 @@ export const useStore = create<State>()(
       if (effort !== 'default') opts.effort = effort as EffortLevel
       await startRunner(chatId, opts)
       refreshAfterStart(chatId)
+      return chatId
     },
 
     async newGeneralChat() {
@@ -912,10 +1002,95 @@ export const useStore = create<State>()(
       refreshAfterStart(chatId)
     },
 
+    async rewindChat(chatId, userMsgId, { restoreFiles }) {
+      const c = get().chats[chatId]
+      if (!c || c.engine === 'codex' || !c.sessionId || c.status === 'running' || c.status === 'compacting') return
+      const idx = c.messages.findIndex((m) => m.id === userMsgId && m.role === 'user')
+      if (idx < 0) return
+      const oldId = c.sessionId
+      const msg = c.messages[idx]
+      const text = msg.blocks.flatMap((b) => (b.kind === 'text' ? [b.text] : [])).join('\n\n')
+      const images: ImageAttachment[] = msg.blocks.flatMap((b) => (b.kind === 'image' ? [{ id: crypto.randomUUID(), mediaType: b.mediaType, data: b.data } as ImageAttachment] : []))
+      // Files first, while the runner (which holds the checkpoints) is still alive. A closed chat has no runner, so it is simply not offered.
+      if (restoreFiles && !c.closed) {
+        const r = await window.desktop.rewindFiles(chatId, userMsgId, false)
+        if (!r.canRewind) {
+          set((s) => {
+            if (s.chats[chatId]) s.chats[chatId].error = `Could not restore files: ${r.error ?? 'unknown error'}`
+          })
+          return
+        }
+      }
+      await window.desktop.closeChat(chatId)
+      const parent = await window.desktop.rewindPoint(c.cwd, oldId, userMsgId)
+      const restoreDraft = (): void => {
+        set((s) => {
+          const x = s.chats[chatId]
+          if (!x) return
+          x.draft = text
+          x.attachments = images
+        })
+        requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus())
+      }
+      if (!parent) {
+        // First message: nothing to keep, same as /clear.
+        await get().clearChat(chatId)
+        restoreDraft()
+        return
+      }
+      const sessionId = crypto.randomUUID()
+      const keep = get().sessionSortTime[oldId] ?? get().sessions.find((x) => x.sessionId === oldId)?.createdAt ?? c.createdAt ?? Date.now()
+      set((s) => {
+        const x = s.chats[chatId]
+        if (!x) return
+        if (!s.hiddenSessions.includes(oldId)) s.hiddenSessions.push(oldId)
+        delete s.sessionSortTime[oldId]
+        s.sessionSortTime[sessionId] = keep
+        const i = s.keepWarm.indexOf(oldId)
+        if (i >= 0) {
+          s.keepWarm[i] = sessionId
+          prefs.set('keepWarm', s.keepWarm)
+        }
+        if (s.remoteSessions.includes(oldId)) {
+          s.remoteSessions = s.remoteSessions.filter((id) => id !== oldId)
+          prefs.set('remoteSessions', s.remoteSessions)
+        }
+        if (oldId in s.warmedAt) {
+          delete s.warmedAt[oldId]
+          prefs.set('warmedAt', s.warmedAt)
+        }
+        prefs.set('hiddenSessions', s.hiddenSessions)
+        prefs.set('sessionSortTime', s.sessionSortTime)
+        // Keep the messages before the chosen one; everything else restarts with the new runner.
+        const kept = x.messages.slice(0, idx)
+        Object.assign(x, emptyModel(), {
+          messages: kept,
+          sessionId,
+          createdAt: keep,
+          pending: [],
+          context: undefined,
+          closed: false,
+          transcriptLoaded: true,
+          unread: false,
+          queue: [],
+          comments: [],
+          commands: x.commands,
+        })
+      })
+      const opts: StartChatOptions = { chatId, cwd: c.cwd, permissionMode: c.requestedMode, resume: oldId, fork: true, resumeAt: parent, sessionId }
+      if (c.requestedModel && c.requestedModel !== 'default') opts.model = c.requestedModel
+      if (c.requestedEffort && c.requestedEffort !== 'default') opts.effort = c.requestedEffort as EffortLevel
+      if (c.account) opts.account = c.account
+      await startRunner(chatId, opts)
+      refreshAfterStart(chatId)
+      restoreDraft()
+    },
+
     async sendMessage(chatId, text, images = [], fromDraft = false) {
       const uuid = crypto.randomUUID()
       const before = get().chats[chatId]
       if (!before) return
+      if (text !== RESUME_PROMPT) autoSwitched.delete(chatId)
       // Writing to an archived chat brings it back.
       if (before.sessionId && isArchivedId(get(), before.sessionId)) await get().unarchiveSession(before.sessionId)
       // The CLI process ended (crash, error, or it was closed): start it again
@@ -955,6 +1130,41 @@ export const useStore = create<State>()(
         }
       })
       await window.desktop.send(chatId, content, uuid)
+    },
+
+    schedule(chatId, text, when) {
+      set((s) => {
+        const c = s.chats[chatId]
+        if (!c) return
+        c.queue.push({ id: crypto.randomUUID(), text, images: [], ...when })
+        c.draft = ''
+        c.attachments = []
+      })
+    },
+
+    tickScheduled() {
+      const st = get()
+      const now = Date.now()
+      for (const c of Object.values(st.chats)) {
+        const due = c.queue.find((q) => scheduledDue(q, c, st, now))
+        if (!due) continue
+        if (!(c.closed || c.status === 'idle') || c.pending.length) continue
+        get().removeQueued(c.chatId, due.id)
+        void get().sendMessage(c.chatId, due.text, [])
+      }
+    },
+
+    setAwaySummary(v) {
+      prefs.set('awaySummary', v)
+      set((s) => {
+        s.awaySummary = v
+      })
+    },
+
+    dismissAway() {
+      set((s) => {
+        s.awayCard = null
+      })
     },
 
     enqueue(chatId, text, images, fromDraft = true) {
@@ -1192,9 +1402,18 @@ export const useStore = create<State>()(
       })
     },
 
+    openFind(query) {
+      set((s) => {
+        s.findQuery = query
+        s.findSeq++
+        s.findOpen = true
+      })
+    },
+
     setFindOpen(v) {
       set((s) => {
         s.findOpen = v
+        if (!v) s.findQuery = ''
       })
     },
 
@@ -1596,6 +1815,8 @@ export const useStore = create<State>()(
         prefs.set('projectNames', s.projectNames)
         delete s.projectDefaults[cwd]
         prefs.set('projectDefaults', s.projectDefaults)
+        delete s.projectNotes[cwd]
+        prefs.set('projectNotes', s.projectNotes)
       })
     },
 
@@ -1615,11 +1836,49 @@ export const useStore = create<State>()(
         prefs.set('projectNames', s.projectNames)
       })
     },
+
+    setProjectNote(root, text) {
+      const t = text.trim()
+      set((s) => {
+        if (t) s.projectNotes[root] = t
+        else delete s.projectNotes[root]
+        prefs.set('projectNotes', s.projectNotes)
+      })
+    },
+
+    async handoffChat(chatId, engine) {
+      const st = get()
+      const c = st.chats[chatId]
+      if (!c || isGeneral(c.cwd) || st.codexStatus?.loggedIn === false || !st.codexStatus?.installed) return
+      const text = handoffText(c)
+      const cwd = c.cwd
+      const id = await get().newChat({ cwd, permissionMode: st.lastMode, engine })
+      await get().sendMessage(id, text)
+    },
   })),
 )
 
 /** Chats this client closed itself; a runner kept alive by another client must not pull them back in. */
 const RESUME_PROMPT = 'Continue where you left off.'
+/** Chats already switched automatically since the user's last message (loop guard). */
+const autoSwitched = new Set<string>()
+
+/** A rate-limit error ended the turn: move the chat to the other account with the most headroom, if the user opted in. */
+function maybeAutoSwitch(chatId: string): boolean {
+  const s = useStore.getState()
+  const c = s.chats[chatId]
+  if (isPhone || !s.autoSwitchAccount || !c || c.engine === 'codex' || c.closed || !c.error || !RATE_LIMIT.test(c.error) || autoSwitched.has(chatId)) return false
+  const target = pickAutoSwitchAccount(s.accounts, c.account ?? s.accounts.active, s.accountUsage)
+  if (!target) return false
+  autoSwitched.add(chatId)
+  const label = accountLabel(target)
+  void s.continueWithAccount(chatId, target.id, { resume: true }).then(() => {
+    const t = useStore.getState()
+    if (!t.chats[chatId] || !t.notifications) return
+    void window.desktop.notify?.({ chatId, title: t.chats[chatId].title || 'Claude Code', body: `Switched ${t.chats[chatId].title || 'chat'} to ${label}`, onlyIfUnfocused: t.activeChatId === chatId })
+  })
+  return true
+}
 const closedHere = new Set<string>()
 /** Codex /clear: the sort slot of the cleared row, applied once the new thread's id arrives (system init). */
 const codexSortSlot = new Map<string, number>()
@@ -1779,6 +2038,11 @@ async function reattachAll(): Promise<void> {
  * as the process is up.
  */
 async function startRunner(chatId: string, opts: StartChatOptions): Promise<void> {
+  // The project note goes into the system prompt of every Claude project chat (start, resume, fork, clear, rewind, account switch).
+  if (opts.engine !== 'codex' && !isGeneral(opts.cwd) && opts.appendSystemPrompt === undefined) {
+    const note = useStore.getState().projectNotes[projectRoot(opts.cwd)]
+    if (note) opts = { ...opts, appendSystemPrompt: note }
+  }
   const res = await window.desktop.startChat(opts)
   useStore.setState((s) => {
     const c = s.chats[chatId]
@@ -1821,6 +2085,43 @@ async function enableRemote(chatId: string): Promise<void> {
 /** True when an event comes from a runner that has since been replaced. */
 function stale(c: Chat, gen: number | undefined): boolean {
   return typeof gen === 'number' && typeof c.gen === 'number' && gen < c.gen
+}
+
+/** Scheduled item that is due now (plain queue items are never "due": the result flush handles them). */
+function scheduledDue(q: QueuedMessage, c: Chat, st: Pick<State, 'accounts' | 'accountUsage' | 'claudeUsage'>, now: number): boolean {
+  if (q.sendAt !== undefined && !q.afterReset) return now >= q.sendAt
+  if (!q.afterReset) return false
+  // After a limit reset: due when no window of the chat's account is exhausted (or each exhausted one reset > 60 s ago).
+  const acct = c.account ?? st.accounts.active
+  const usage = st.accountUsage[acct] ?? (acct === st.accounts.active ? st.claudeUsage : null)
+  const blocked = (percent: number, resetsAt: number | null): boolean => percent >= 100 && resetsAt !== null && now < resetsAt + 60_000
+  if (c.rateLimit && blocked(c.rateLimit.percent, c.rateLimit.resetsAt)) return false
+  for (const r of usage?.rows ?? []) {
+    if (r.kind !== 'session' && r.kind !== 'weekly_all' && r.kind !== 'weekly_scoped') continue
+    if (blocked(r.percent, r.resetsAt ? Date.parse(r.resetsAt) : null)) return false
+  }
+  return true
+}
+
+/** Reopen chats that have persisted scheduled messages (in the background) and put the items back into their queues. */
+async function restoreScheduled(): Promise<void> {
+  const saved = prefs.get<Record<string, ScheduledItem[]>>('scheduled', {})
+  for (const [sid, items] of Object.entries(saved)) {
+    const sess = useStore.getState().sessions.find((x) => x.sessionId === sid)
+    if (!sess || !items.length) {
+      delete saved[sid]
+      prefs.set('scheduled', saved)
+      continue
+    }
+    if (!Object.values(useStore.getState().chats).some((c) => c.sessionId === sid)) await useStore.getState().openSession(sess, false, true)
+    useStore.setState((s) => {
+      const c = Object.values(s.chats).find((x) => x.sessionId === sid)
+      if (!c) return
+      for (const it of items) if (!c.queue.some((q) => q.id === it.id)) c.queue.push({ id: it.id, text: it.text, images: [], sendAt: it.sendAt, afterReset: it.afterReset })
+    })
+  }
+  scheduledRestored = true
+  useStore.getState().tickScheduled()
 }
 
 /** A chat with nothing typed, sent or on disk (a non-empty draft keeps it so typed text is never lost). */
@@ -1978,6 +2279,36 @@ let wired = false
 let tabsRestored = false
 let lastTabsKey = ''
 const terminalCreating = new Set<string>()
+let scheduledRestored = false
+let lastScheduledKey = ''
+
+/** Per-chat activity while the window was unfocused (for the "While you were away" card). */
+const awayLog = new Map<string, { firstAt: number; lastAt: number; startIdx: number; status: 'finished' | 'error' | 'ask' | null; outputTokens: number }>()
+let awaySince: number | null = null
+const AWAY_MIN_MS = 30 * 60_000
+
+function noteAway(chatId: string, before: Chat | undefined): void {
+  if (awaySince === null) return
+  const now = Date.now()
+  const e = awayLog.get(chatId)
+  if (e) e.lastAt = now
+  else awayLog.set(chatId, { firstAt: now, lastAt: now, startIdx: before?.messages.length ?? 0, status: null, outputTokens: 0 })
+}
+
+function buildAwayCard(): AwayItem[] {
+  const st = useStore.getState()
+  const out: AwayItem[] = []
+  for (const [chatId, e] of awayLog) {
+    const c = st.chats[chatId]
+    if (!c || !e.status) continue
+    const status = c.pending.length ? 'ask' : e.status
+    let files = 0
+    for (const m of c.messages.slice(e.startIdx))
+      for (const b of m.blocks) if (b.kind === 'tool_use' && (b.name === 'Edit' || b.name === 'Write' || b.name === 'NotebookEdit')) files++
+    out.push({ chatId, title: c.title || 'Chat', cwd: c.cwd, status, error: status === 'error' ? c.error : undefined, durationMs: e.lastAt - e.firstAt, outputTokens: e.outputTokens, files })
+  }
+  return out
+}
 
 export function wireEvents(): void {
   if (wired) return
@@ -1993,7 +2324,28 @@ export function wireEvents(): void {
     prefs.set('openTabs', { sessions, active })
   })
   // Prompt-cache keep-alive for chats that opted in.
-  if (!isPhone) setInterval(() => void useStore.getState().tickKeepWarm(), 30_000)
+  if (!isPhone)
+    setInterval(() => {
+      void useStore.getState().tickKeepWarm()
+      if (scheduledRestored) useStore.getState().tickScheduled()
+    }, 30_000)
+  // Persist scheduled messages per session (chats that are not open keep their saved entries).
+  if (!isPhone)
+    useStore.subscribe((s) => {
+      if (!scheduledRestored) return
+      const saved = prefs.get<Record<string, ScheduledItem[]>>('scheduled', {})
+      const next: Record<string, ScheduledItem[]> = {}
+      for (const [sid, items] of Object.entries(saved)) if (!Object.values(s.chats).some((c) => c.sessionId === sid)) next[sid] = items
+      for (const c of Object.values(s.chats)) {
+        if (!c.sessionId) continue
+        const items = c.queue.filter((q) => q.sendAt !== undefined || q.afterReset).map((q) => ({ id: q.id, text: q.text, sendAt: q.sendAt, afterReset: q.afterReset, cwd: c.cwd, title: c.title }))
+        if (items.length) next[c.sessionId] = items
+      }
+      const key = JSON.stringify(next)
+      if (key === lastScheduledKey) return
+      lastScheduledKey = key
+      prefs.set('scheduled', next)
+    })
   // Live runners (also those this client has not opened) drive the sidebar dots.
   void window.desktop.liveChats().then((l) => useStore.getState().setLive(l)).catch(() => {})
   window.desktop.onLiveChanged((l) => useStore.getState().setLive(l))
@@ -2016,6 +2368,8 @@ export function wireEvents(): void {
     window.desktop.onAccountsChanged(applyAccounts)
     void window.desktop.getUsage().then((u) => useStore.setState({ claudeUsage: u })).catch(() => {})
     window.desktop.onUsage((u) => useStore.setState({ claudeUsage: u }))
+    void window.desktop.usageAll().then((u) => useStore.setState({ accountUsage: u })).catch(() => {})
+    window.desktop.onUsageAll((u) => useStore.setState({ accountUsage: u }))
   }
   window.desktop.onSharedPrefChanged(({ key, value }) => {
     if (SHARED_PREFS.includes(key)) applyShared(key, value)
@@ -2071,6 +2425,14 @@ export function wireEvents(): void {
     if (stale(before, gen)) return
     // The reducer clears this flag on the result, so read it first: a turn the user stopped needs no notification.
     const interrupted = message.type === 'result' && !!before.interrupted
+    noteAway(chatId, before)
+    if (message.type === 'result' && awaySince !== null && !interrupted) {
+      const e = awayLog.get(chatId)
+      if (e) {
+        e.outputTokens += (message as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? 0
+        e.status = (message as { is_error?: boolean }).is_error ? 'error' : 'finished'
+      }
+    }
     useStore.setState((s) => {
       const c = s.chats[chatId]
       if (!c) return
@@ -2083,7 +2445,7 @@ export function wireEvents(): void {
         }
         if (message.type === 'result' && c.error && CODEX_AUTH_ERROR.test(c.error) && s.codexStatus) s.codexStatus.loggedIn = false
       } else if (c.error === 'authentication_failed' && !isPhone && (!c.account || c.account === s.accounts.active)) s.auth = 'out'
-      if (message.type === 'result' && !interrupted && !c.queue.length && !stillWorking(c) && (s.activeChatId !== chatId || !document.hasFocus())) c.unread = true
+      if (message.type === 'result' && !interrupted && !c.queue.some((q) => !q.sendAt && !q.afterReset) && !stillWorking(c) && (s.activeChatId !== chatId || !document.hasFocus())) c.unread = true
       if (message.type === 'system' && message.subtype === 'commands_changed' && Array.isArray(message.commands)) {
         c.commands = message.commands.map((x: SlashCommandInfo) => ({ name: x.name, description: x.description, argumentHint: x.argumentHint, aliases: x.aliases }))
       }
@@ -2092,8 +2454,9 @@ export function wireEvents(): void {
     const c = useStore.getState().chats[chatId]
     if (!c) return
     void useStore.getState().refreshChanges(c.cwd)
+    if (c.error && !interrupted && maybeAutoSwitch(chatId)) return
     // Send the next queued message; it starts the next turn.
-    const next = c.queue[0]
+    const next = c.queue.find((q) => !q.sendAt && !q.afterReset)
     if (next && !c.closed) {
       useStore.getState().removeQueued(chatId, next.id)
       void useStore.getState().sendMessage(chatId, next.text, next.images)
@@ -2110,6 +2473,9 @@ export function wireEvents(): void {
       const c = s.chats[req.chatId]
       if (!c) return
       c.pending.push(req)
+      noteAway(req.chatId, undefined)
+      const e = awayLog.get(req.chatId)
+      if (e) e.status = 'ask'
       if (s.activeChatId !== req.chatId || !document.hasFocus()) c.unread = true
     })
     maybeNotify(req.chatId, permissionText(req, useStore.getState().chats[req.chatId]?.engine === 'codex' ? 'Codex' : 'Claude'), 'attention')
@@ -2190,6 +2556,24 @@ export function wireEvents(): void {
       if (c) c.unread = false
     })
   })
+  if (!isPhone) {
+    // "While you were away": remember what happened while the window was unfocused for a long time.
+    const leave = (): void => {
+      if (awaySince === null) awaySince = Date.now()
+    }
+    const back = (): void => {
+      if (awaySince === null || document.hidden || !document.hasFocus()) return
+      const long = Date.now() - awaySince >= AWAY_MIN_MS
+      awaySince = null
+      const items = long && useStore.getState().awaySummary ? buildAwayCard() : []
+      awayLog.clear()
+      if (items.length) useStore.setState({ awayCard: items })
+    }
+    window.addEventListener('blur', leave)
+    window.addEventListener('focus', back)
+    document.addEventListener('visibilitychange', () => (document.hidden ? leave() : back()))
+    if (!document.hasFocus()) leave()
+  }
   window.desktop.onSessionsChanged(() => {
     void useStore.getState().loadSessions()
   })

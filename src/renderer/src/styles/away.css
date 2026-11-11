@@ -1,0 +1,71 @@
+/* "While you were away" card and the composer's schedule popover */
+.away-modal {
+  width: 520px;
+  max-width: calc(100vw - 40px);
+}
+.away-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 6px 0 12px;
+}
+.away-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  text-align: left;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.away-row:hover {
+  border-color: var(--accent-muted);
+}
+.away-title {
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.away-status {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.away-status.ask {
+  color: var(--ask);
+}
+.away-meta {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.sched-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.sched-menu {
+  left: auto;
+  right: 0;
+  min-width: 190px;
+}
+.sched-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+.sched-custom input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  padding: 3px 6px;
+  color-scheme: inherit;
+}

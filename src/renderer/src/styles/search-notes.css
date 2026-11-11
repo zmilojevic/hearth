@@ -1,0 +1,57 @@
+/* Sidebar "In messages" search hits, project note icon and dialog. */
+.msg-hits-head {
+  margin: 10px 14px 2px;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.row.msg-hit {
+  gap: 2px;
+}
+.msg-hit-proj {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.msg-hit-snip {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.msg-hit-snip b {
+  font-weight: 500;
+  color: var(--text);
+}
+.group-note {
+  display: inline-flex;
+  flex: none;
+  margin-left: 6px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+.note-text {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.note-text:focus {
+  border-color: var(--accent-muted);
+}

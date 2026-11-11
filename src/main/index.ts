@@ -12,9 +12,10 @@ import { listCodexSessions, codexMessages, codexSessionMeta, codexRename, codexD
 import { handle, on } from './ipc'
 import { registerSharedPrefs } from './sharedPrefs'
 import { readSubagentTranscript } from './subagents'
-import { readSessionMeta, sessionCwd } from './sessionMeta'
+import { readSessionMeta, sessionCwd, rewindPoint } from './sessionMeta'
 import { UsageService } from './usage'
 import { usageHistory } from './usageHistory'
+import { searchTranscripts } from './search'
 import { gitChanges, createWorktree, removeWorktree, gitSetStaged, gitDiscardFile, gitDiscardHunk } from './git'
 import { launchTools, openInEditor, openTerminal } from './launch'
 import { RemoteManager } from './remote'
@@ -27,7 +28,7 @@ import { claudeBinary } from './claudeBin'
 import { CHATS_DIR } from './paths'
 import { setupTray, setTrayBadge, focusWindow } from './tray'
 import { listSkills } from './skills'
-import { workflowList, workflowRead, workflowSave, workflowDelete, workflowAgents } from './workflows'
+import { workflowList, workflowRead, workflowSave, workflowDelete, workflowAgents, workflowJournal } from './workflows'
 import { resourceFile } from './resources'
 import { migrateLegacyData } from './migrate'
 import { loadLoginShellEnv } from './shellEnv'
@@ -77,11 +78,25 @@ const log = (s: string): void => {
 mkdirSync(CHATS_DIR, { recursive: true })
 const codexServer = new CodexServer((s) => log(s), app.getVersion())
 const codexAccount = new CodexAccountService(codexServer, log, (u) => emit('codex:usageChanged', u))
-const runners = new RunnerRegistry(emit, log, codexServer)
+// Live rate_limit_events of every Claude runner feed the usage cache of that runner's account.
+const runnerEmit = (channel: string, payload: unknown): void => {
+  emit(channel, payload)
+  if (channel !== 'agent:event') return
+  const p = payload as { chatId?: string; message?: { type?: string } }
+  if (p.message?.type !== 'rate_limit_event' || !p.chatId) return
+  const r = runners.getClaude(p.chatId)
+  if (r) usageService?.noteRateLimit(r.account, p.message)
+}
+const runners = new RunnerRegistry(runnerEmit, log, codexServer)
 const remote = new RemoteManager(runners, emit, log)
 const ptys = new PtyManager(emit)
 mobileServer = new MobileServer(emit, log)
-usageService = new UsageService(runners, log, (u) => emit('usage:changed', u))
+usageService = new UsageService(
+  runners,
+  log,
+  (u) => emit('usage:changed', u),
+  () => emit('usage:allChanged', usageService!.all()),
+)
 
 function createWindow(): void {
   win = new BrowserWindow({
@@ -144,6 +159,8 @@ handle('sessions:messages', async (_ctx, sessionId: string, cwd?: string, engine
 handle('subagent:transcript', async (_ctx, cwd: string, sessionId: string, toolUseId: string, sinceMtime?: number) => {
   return readSubagentTranscript(cwd, sessionId, toolUseId, sinceMtime)
 })
+
+handle('sessions:search', (_ctx, query: string, limit?: number) => searchTranscripts(String(query ?? ''), limit))
 
 handle('sessions:meta', async (_ctx, items: { sessionId: string; cwd: string; engine?: Engine }[]) => {
   const out = await Promise.all(
@@ -226,10 +243,16 @@ handle('workflow:list', (_ctx, root: string) => workflowList(root))
 handle('workflow:read', (_ctx, path: string) => workflowRead(path))
 handle('workflow:save', (_ctx, req: WorkflowSaveRequest) => workflowSave(req))
 handle('workflow:delete', (_ctx, path: string) => workflowDelete(path))
+handle('workflow:journal', (_ctx, dir: string) => workflowJournal(dir))
 handle('workflow:agents', (_ctx, root: string) => workflowAgents(root, log))
 handle('chat:commands', (_ctx, chatId: string) => runners.get(chatId)?.listCommands() ?? [])
 handle('chat:agents', (_ctx, chatId: string) => runners.get(chatId)?.listAgents() ?? [])
 handle('chat:files', (_ctx, chatId: string, query: string) => runners.get(chatId)?.fileSuggestions(query) ?? [])
+handle('chat:rewindFiles', async (_ctx, chatId: string, userUuid: string, dryRun: boolean) => {
+  const r = runners.getClaude(chatId)
+  return r ? r.rewindFiles(userUuid, dryRun) : { canRewind: false, error: 'Chat is not running' }
+})
+handle('chat:rewindPoint', (_ctx, cwd: string, sessionId: string, userUuid: string) => rewindPoint(sessionId, cwd, userUuid))
 handle('chat:warm', (_ctx, chatId: string) => runners.get(chatId)?.warmCache() ?? false)
 handle('chat:taskOutput', (_ctx, chatId: string, taskId: string) => runners.get(chatId)?.taskOutput(taskId) ?? null)
 handle('chat:stopTask', (_ctx, chatId: string, taskId: string) => runners.get(chatId)?.stopTask(taskId))
@@ -290,6 +313,7 @@ handle('mobile:pairStart', () => mobileServer!.pairStart())
 handle('mobile:revoke', (_ctx, id: string) => mobileServer!.revoke(id))
 
 handle('usage:get', (_ctx, force?: boolean) => usageService!.get(!!force))
+handle('usage:all', () => usageService!.all())
 handle('usage:history', () => usageHistory())
 
 // ---- IPC: desktop notifications -------------------------------------------

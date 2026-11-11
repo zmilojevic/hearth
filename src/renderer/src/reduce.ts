@@ -65,6 +65,10 @@ export interface BgTask {
   ambient: boolean
   summary?: string
   error?: string
+  /** local_workflow: the saved workflow's name. */
+  workflowName?: string
+  /** local_workflow: the run's transcript dir (`…/subagents/workflows/wf_*`), parsed from the Workflow tool result. */
+  runDir?: string
 }
 
 export interface ChatMessage {
@@ -166,12 +170,27 @@ export function findTool(model: ChatModel, toolUseId: string): ToolBlock | undef
   return undefined
 }
 
+const RUN_DIR_RE = /[^\s"'`<>]*subagents\/workflows\/wf_[^/\s"'`<>]+/
+
+/** Fills `workflowName` / `runDir` of a workflow task from its Workflow tool call (whichever of task and result arrives first). */
+function linkWorkflowTask(model: ChatModel, t: BgTask): void {
+  if (t.type !== 'local_workflow' || !t.toolUseId) return
+  const tool = findTool(model, t.toolUseId)
+  if (!tool || tool.name !== 'Workflow') return
+  if (!t.workflowName && typeof (tool.input as any)?.name === 'string') t.workflowName = (tool.input as any).name
+  if (!t.runDir && tool.result) {
+    const m = RUN_DIR_RE.exec(tool.result.text)
+    if (m) t.runDir = m[0]
+  }
+}
+
 function attachResult(model: ChatModel, toolUseId: string, content: unknown, isError: boolean): void {
   const tool = findTool(model, toolUseId)
   if (!tool) return
   tool.result = { text: resultText(content), isError }
   // A denial comes back as an error result; keep the more specific status.
   if (tool.status !== 'denied') tool.status = isError ? 'error' : 'done'
+  if (tool.name === 'Workflow') for (const t of model.tasks) if (t.toolUseId === toolUseId) linkWorkflowTask(model, t)
   // A foreground subagent without task events ends with its tool result.
   const a = AGENT_TOOLS.has(tool.name) ? findSubagent(model, { toolUseId }) : undefined
   if (a && !a.taskId && a.status === 'running') {
@@ -540,6 +559,8 @@ function applySystem(model: ChatModel, m: any): void {
         if (m.tool_use_id) t.toolUseId = m.tool_use_id
         t.backgrounded = !!m.is_backgrounded
         t.ambient = !!(m.ambient || m.skip_transcript)
+        if (m.workflow_name) t.workflowName = String(m.workflow_name)
+        linkWorkflowTask(model, t)
         return
       }
       if (m.skip_transcript || m.ambient) return
