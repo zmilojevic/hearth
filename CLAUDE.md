@@ -69,7 +69,7 @@ the same day. Renamed to Hearth on 2026-10-26 (repo folder stays `~/dev/agent-co
   its events; a deliberate close emits no `chat:exit` (fixes the "Session process ended" race). After each
   `result` it calls `getContextUsage()` → `chat:context`. `supportedModels()` → `chat:models` (with per-model effort levels), `setEffort` → `applyFlagSettings({effortLevel})`
   (session-only, `null` = model default; start option `effort`, last pick remembered as `lastEffort`),
-  `supportedCommands()` → `chat:commands`, `supportedAgents()` → `chat:agents`. `warmCache()` (`chat:warm`) → undocumented `askSideQuestion` (SDK `/btw`): reuses the main cache prefix, writes nothing to the transcript; false if the method is missing or it throws (90 s timeout).
+  `supportedCommands()` → `chat:commands`, in-process SDK MCP server `hearth` (`createSdkMcpServer`, needs the `zod` dep; hidden from `mcpStatus()`) with tool `rename_chat` → `renameSession` + `sessions:changed` (pre-approved via `allowedTools`, also in general chats; not for Codex), `supportedAgents()` → `chat:agents`. `warmCache()` (`chat:warm`) → undocumented `askSideQuestion` (SDK `/btw`): reuses the main cache prefix, writes nothing to the transcript; false if the method is missing or it throws (90 s timeout).
 - General chats (claude.ai style, no project): an ordinary SDK session whose cwd is `CHATS_DIR`
   (`src/main/paths.ts` = `~/.local/share/hearth/chats`, created at startup, exposed as `chatsDir()` / `app:chatsDir`).
   Identity is purely `cwd === chatsDir`, so listing/resume/rename/delete/keep-warm/`/clear` work unchanged. `ChatRunner.start()` then

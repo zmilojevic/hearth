@@ -1,5 +1,8 @@
 import {
   query,
+  createSdkMcpServer,
+  tool,
+  renameSession,
   type Query,
   type SDKUserMessage,
   type SDKMessage,
@@ -8,6 +11,7 @@ import {
   type PermissionResult,
   type PermissionUpdate,
 } from '@anthropic-ai/claude-agent-sdk'
+import { z } from 'zod'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute } from 'node:path'
@@ -229,7 +233,34 @@ export class ChatRunner implements Runner {
         })
       })
 
+    // In-process MCP server: lets the agent rename its own chat.
+    const hearth = createSdkMcpServer({
+      name: 'hearth',
+      version: '1',
+      tools: [
+        tool(
+          'rename_chat',
+          'Rename this chat (the title shown in the Hearth sidebar and top bar). Use when the user asks you to rename or retitle the chat. Keep titles short (2-8 words), no quotes or trailing punctuation.',
+          { title: z.string().min(1).max(120).describe('New chat title, short (a few words)') },
+          async (args) => {
+            try {
+              const title = String(args.title ?? '').replace(/\s+/g, ' ').trim()
+              if (!title) return { content: [{ type: 'text' as const, text: 'Title is empty' }], isError: true }
+              if (!this.sessionId) return { content: [{ type: 'text' as const, text: 'No session yet' }], isError: true }
+              await renameSession(this.sessionId, title, { dir: this.opts.cwd })
+              this.emit('sessions:changed', null)
+              return { content: [{ type: 'text' as const, text: `Chat renamed to "${title}"` }] }
+            } catch (e) {
+              return { content: [{ type: 'text' as const, text: e instanceof Error ? e.message : String(e) }], isError: true }
+            }
+          },
+        ),
+      ],
+    })
+
     const options: Options = {
+      mcpServers: { hearth },
+      allowedTools: ['mcp__hearth__rename_chat'],
       cwd: this.opts.cwd,
       permissionMode: this.opts.permissionMode,
       allowDangerouslySkipPermissions: this.opts.permissionMode === 'bypassPermissions',
@@ -451,7 +482,7 @@ export class ChatRunner implements Runner {
 
   async mcpStatus(): Promise<McpServerInfo[]> {
     const list = (await this.q?.mcpServerStatus()) ?? []
-    return list.map((s) => ({
+    return list.filter((s) => s.name !== 'hearth').map((s) => ({
       name: s.name,
       status: s.status,
       error: s.error,
