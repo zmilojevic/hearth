@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Square, Eraser, X, Clock, ImagePlus, CornerDownLeft, Flame, Snowflake, File, Folder, Smartphone } from 'lucide-react'
+import { ArrowUp, Square, Eraser, X, Clock, ImagePlus, CornerDownLeft, Flame, Snowflake, File, Folder, Smartphone, Repeat } from 'lucide-react'
 import Dropdown from './Dropdown'
 import ImageThumb from './ImageThumb'
 import ScheduleButton, { scheduleLabel } from './ScheduleButton'
@@ -8,7 +8,7 @@ import { AgentsMdCard } from './CodexCards'
 import { useStore, isGeneral, codexInstalled } from '../store'
 import { EFFORT_LEVELS, PERMISSION_MODES, CODEX_MODES, type CodexMode, type PermissionMode, type SlashCommandInfo, type AgentChoice } from '@shared/types'
 import { latestModels, modelLabel, fmtTokens, modLabel, isPhone, defaultContextWindow } from '../util'
-import { dataUrl, readImages } from '../images'
+import { dataUrl, readImages, type ImageAttachment } from '../images'
 
 const FALLBACK_MODELS: { value: string; displayName: string; description?: string }[] = [
   { value: 'default', displayName: 'Default' },
@@ -172,7 +172,12 @@ export default function Composer({ chatId }: { chatId: string }) {
   const ctxMax = Math.max(chat.context?.maxTokens || defaultContextWindow(chat.model), ctxTokens ?? 0)
   const smallContext = ctxTokens != null && ctxTokens < ctxMax * 0.05
   const [coldConfirm, setColdConfirm] = useState(false)
-  useEffect(() => setColdConfirm(false), [chatId])
+  // Payload of a pending "resend" while the cold-cache confirm is open (null = send the draft).
+  const [resendPayload, setResendPayload] = useState<{ text: string; images: ImageAttachment[] } | null>(null)
+  useEffect(() => {
+    setColdConfirm(false)
+    setResendPayload(null)
+  }, [chatId])
   const general = useStore((s) => isGeneral(s.chats[chatId]?.cwd))
   const ta = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -285,6 +290,24 @@ export default function Composer({ chatId }: { chatId: string }) {
     }
     return out
   }, [chat?.messages])
+  // Last user message (text + images) for the "Resend last message" button.
+  const lastUser = useMemo<{ text: string; images: ImageAttachment[] } | null>(() => {
+    const msgs = chat?.messages ?? []
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if (m.role !== 'user') continue
+      const text = m.blocks
+        .filter((b) => b.kind === 'text' && b.text !== '*[image attached]*')
+        .map((b) => (b as { text: string }).text)
+        .join('\n')
+        .trim()
+      const images = m.blocks.flatMap((b) =>
+        b.kind === 'image' ? [{ id: crypto.randomUUID(), mediaType: b.mediaType, data: b.data } as ImageAttachment] : []
+      )
+      if (text || images.length) return { text, images }
+    }
+    return null
+  }, [chat?.messages])
   // Index into `history` while recalling, -1 when not navigating.
   const histIdx = useRef(-1)
   useEffect(() => {
@@ -334,6 +357,7 @@ export default function Composer({ chatId }: { chatId: string }) {
       return
     }
     histIdx.current = -1
+    setResendPayload(null)
     if (text === '/clear') {
       setDraft(chatId, '')
       void clearChat(chatId)
@@ -347,7 +371,22 @@ export default function Composer({ chatId }: { chatId: string }) {
     doSend(now)
   }
 
+  const resend = (): void => {
+    if (!lastUser) return
+    histIdx.current = -1
+    if (!!coldAt && Date.now() >= coldAt && !smallContext) {
+      setResendPayload(lastUser)
+      setColdConfirm(true)
+      return
+    }
+    void sendMessage(chatId, lastUser.text, lastUser.images)
+  }
+
   const doSend = (now = false): void => {
+    if (resendPayload) {
+      void sendMessage(chatId, resendPayload.text, resendPayload.images)
+      return
+    }
     const text = draft.trim()
     const images = chat.attachments
     if (!text && !images.length) return
@@ -358,6 +397,11 @@ export default function Composer({ chatId }: { chatId: string }) {
   }
 
   const clearAndSend = async (): Promise<void> => {
+    if (resendPayload) {
+      await clearChat(chatId)
+      void sendMessage(chatId, resendPayload.text, resendPayload.images)
+      return
+    }
     const text = draft.trim()
     const images = chat.attachments
     if (!text && !images.length) return
@@ -789,9 +833,16 @@ export default function Composer({ chatId }: { chatId: string }) {
               <Square size={14} />
             </button>
           ) : (
-            <button className="send" title="Send" disabled={!canSend} onClick={() => submit()}>
-              <ArrowUp size={16} />
-            </button>
+            <>
+              {lastUser && !lastUser.text.startsWith('/') && (
+                <button className="send resend-btn" title="Resend last message" onClick={resend}>
+                  <Repeat size={15} />
+                </button>
+              )}
+              <button className="send" title="Send" disabled={!canSend} onClick={() => submit()}>
+                <ArrowUp size={16} />
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -801,16 +852,19 @@ export default function Composer({ chatId }: { chatId: string }) {
           tokens={ctxTokens}
           onCancel={() => {
             setColdConfirm(false)
+            setResendPayload(null)
             ta.current?.focus()
           }}
           onConfirm={() => {
             setColdConfirm(false)
             doSend()
+            setResendPayload(null)
             ta.current?.focus()
           }}
           onClearSend={() => {
             setColdConfirm(false)
             void clearAndSend()
+            setResendPayload(null)
             ta.current?.focus()
           }}
         />

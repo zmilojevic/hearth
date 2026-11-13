@@ -1961,12 +1961,14 @@ pre.diff {
   background: var(--border);
   color: var(--text);
 }
-.send.queue-btn {
+.send.queue-btn,
+.send.resend-btn {
   background: var(--surface-2);
   color: var(--text-2);
   border: 1px solid var(--border-2);
 }
-.send.queue-btn:hover {
+.send.queue-btn:hover,
+.send.resend-btn:hover {
   background: var(--border);
   color: var(--text);
 }
