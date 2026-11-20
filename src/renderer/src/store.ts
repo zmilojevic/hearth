@@ -1339,6 +1339,24 @@ export const useStore = create<State>()(
     async setActiveAccount(id) {
       if (isPhone || id === get().accounts.active) return
       await window.desktop.accountsSetActive(id)
+      // Open chats that have not had a turn yet hold a runner on the old account: restart them on the new one.
+      const st = get()
+      for (const [chatId, c] of Object.entries(st.chats)) {
+        if (
+          c.engine !== 'codex' &&
+          !c.closed &&
+          c.messages.length === 0 &&
+          c.pending.length === 0 &&
+          c.queue.length === 0 &&
+          c.status !== 'running' &&
+          c.status !== 'compacting' &&
+          c.status !== 'starting' &&
+          c.account &&
+          c.account !== id &&
+          (!c.sessionId || !st.sessions.some((x) => x.sessionId === c.sessionId))
+        )
+          void get().continueWithAccount(chatId, id)
+      }
     },
 
     async addAccount() {

@@ -213,8 +213,13 @@ export default function ChatView({ chatId }: { chatId: string }) {
               <button
                 key={a.id}
                 className="btn"
+                title={
+                  resumeOnSwitch
+                    ? `Switch this chat to ${accountLabel(a)} and resume the interrupted work`
+                    : `Switch this chat to ${accountLabel(a)}`
+                }
                 onClick={() => {
-                  void useStore.getState().continueWithAccount(chatId, a.id)
+                  void useStore.getState().continueWithAccount(chatId, a.id, { resume: useStore.getState().resumeOnSwitch })
                   focusComposerSoon()
                 }}
               >

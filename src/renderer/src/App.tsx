@@ -20,7 +20,7 @@ import UsageHistoryDialog from './components/UsageHistoryDialog'
 import AwayCard from './components/AwayCard'
 import WorkflowsView from './components/workflows/WorkflowsView'
 import { initTerminals, focusTerminal, terminalHasFocus, setTerminalEscapeHandler } from './terminals'
-import { isPhone } from './util'
+import { isPhone, projectRoot } from './util'
 
 /** Fixed pill while the phone's socket to the desktop is down. */
 function ReconnectPill() {
@@ -161,7 +161,10 @@ export default function App() {
         } else focusTerminalSoon()
       } else if (mod && e.key.toLowerCase() === 'n') {
         e.preventDefault()
-        void newGeneralChat()
+        const st = useStore.getState()
+        const chat = st.activeChatId ? st.chats[st.activeChatId] : undefined
+        if (chat && !isGeneral(chat.cwd)) void st.newChat({ cwd: projectRoot(chat.cwd), permissionMode: st.lastMode })
+        else void newGeneralChat()
         requestAnimationFrame(() => focusComposer())
       } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'q') {
         e.preventDefault()
