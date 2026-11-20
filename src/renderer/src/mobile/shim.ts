@@ -224,6 +224,8 @@ export function installDesktop(platform: string): void {
     setKeepAwake: () => {},
     setTrayBadge: () => {},
     checkUpdate: () => Promise.reject(new Error(unavailable)),
+    downloadUpdate: () => Promise.reject(new Error(unavailable)),
+    installUpdate: () => Promise.reject(new Error(unavailable)),
     authStatus: () => Promise.resolve({ state: 'unknown' }),
     authLogin: () => Promise.resolve({ error: unavailable }),
     ptyCreate: () => Promise.reject(new Error(unavailable)),

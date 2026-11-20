@@ -36,6 +36,8 @@ export const INVOKES = {
   usageAll: 'usage:all',
   usageHistory: 'usage:history',
   checkUpdate: 'app:checkUpdate',
+  downloadUpdate: 'app:downloadUpdate',
+  installUpdate: 'app:installUpdate',
   authStatus: 'auth:status',
   authLogin: 'auth:login',
   accountsList: 'accounts:list',
@@ -116,6 +118,7 @@ export const EVENTS = {
   onSessionsChanged: 'sessions:changed',
   onNotificationClick: 'notification:click',
   onTrayNewChat: 'tray:newChat',
+  onUpdateProgress: 'update:progress',
   onPtyData: 'pty:data',
   onPtyExit: 'pty:exit',
   onRemoteState: 'remote:state',
@@ -138,6 +141,8 @@ export const PHONE_BLOCKED: ReadonlySet<string> = new Set([
   'app:openTerminal',
   'app:notify',
   'app:checkUpdate',
+  'app:downloadUpdate',
+  'app:installUpdate',
   'auth:status',
   'auth:login',
   'accounts:setActive',
@@ -159,7 +164,7 @@ export const PHONE_BLOCKED: ReadonlySet<string> = new Set([
 ])
 
 /** Events that never leave the desktop window. */
-export const DESKTOP_ONLY_EVENTS: ReadonlySet<string> = new Set(['pty:data', 'pty:exit', 'notification:click', 'tray:newChat'])
+export const DESKTOP_ONLY_EVENTS: ReadonlySet<string> = new Set(['pty:data', 'pty:exit', 'notification:click', 'tray:newChat', 'update:progress'])
 
 /** Prefs that shape the sidebar; kept in the main process and synced to every client (store field name == pref key). */
 export const SHARED_PREFS: readonly string[] = [

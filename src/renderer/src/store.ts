@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import type { RemoteStateEvent, SessionSummary, LiveChat, PermissionRequest, PermissionMode, ModelChoice, EffortLevel, Engine, CodexMode, CodexStatus, PlanUsage, StartChatOptions, SessionMeta, ChatContext, SlashCommandInfo, AgentChoice, ContentBlock, UserContent, Theme, GitChanges, UpdateInfo, AccountsState, AuthStatus, TrayBadge } from '@shared/types'
+import type { RemoteStateEvent, SessionSummary, LiveChat, PermissionRequest, PermissionMode, ModelChoice, EffortLevel, Engine, CodexMode, CodexStatus, PlanUsage, StartChatOptions, SessionMeta, ChatContext, SlashCommandInfo, AgentChoice, ContentBlock, UserContent, Theme, GitChanges, UpdateInfo, UpdateProgress, AccountsState, AuthStatus, TrayBadge } from '@shared/types'
 import { applySdkMessage, applyTranscript, emptyModel, restoreLive, restoreBackgroundAgents, restoreFinishedAgents, findTool, type ChatModel, type Block } from './reduce'
 import type { WfGraph, WorkflowFile, WorkflowReadResult, WorkflowScope } from '../../shared/workflow'
 import type { ImageAttachment } from './images'
@@ -206,6 +206,7 @@ interface State {
   updateCheck: boolean
   dismissedUpdate: string
   update: UpdateInfo | null
+  updateProgress: UpdateProgress | null
   /** Claude Code login state from `claude auth status`; 'unknown' never blocks anything. */
   auth: 'unknown' | 'in' | 'out'
   loginOpen: boolean
@@ -266,6 +267,8 @@ interface State {
   setUpdateCheck(v: boolean): void
   dismissUpdate(): void
   checkUpdate(): Promise<void>
+  downloadUpdate(): Promise<void>
+  installUpdate(): Promise<void>
   /** Checks the login of an account (default: the active one); resolves with its state. */
   checkAuth(account?: string): Promise<AuthStatus['state'] | null>
   openLogin(provider?: 'claude' | 'codex', account?: string): void
@@ -623,6 +626,7 @@ export const useStore = create<State>()(
     updateCheck: prefs.get('updateCheck', true),
     dismissedUpdate: prefs.get('dismissedUpdate', ''),
     update: null,
+    updateProgress: null,
     auth: 'unknown',
     loginOpen: false,
     loginProvider: 'claude' as const,
@@ -1308,6 +1312,19 @@ export const useStore = create<State>()(
       if (isPhone) return
       const info = await window.desktop.checkUpdate().catch(() => null)
       if (info) set((s) => void (s.update = info))
+    },
+
+    async downloadUpdate() {
+      if (isPhone) return
+      set((s) => void (s.updateProgress = { state: 'downloading', percent: 0 }))
+      await window.desktop.downloadUpdate().catch((e) => {
+        set((s) => void (s.updateProgress = { state: 'error', error: e instanceof Error ? e.message : String(e) }))
+      })
+    },
+
+    async installUpdate() {
+      if (isPhone) return
+      await window.desktop.installUpdate().catch(() => {})
     },
 
     async checkAuth(account) {

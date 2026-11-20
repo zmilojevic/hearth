@@ -23,22 +23,53 @@ function UpdatePill() {
   const update = useStore((s) => s.update)
   const dismissed = useStore((s) => s.dismissedUpdate)
   const dismissUpdate = useStore((s) => s.dismissUpdate)
+  const progress = useStore((s) => s.updateProgress)
+  const downloadUpdate = useStore((s) => s.downloadUpdate)
+  const installUpdate = useStore((s) => s.installUpdate)
   if (isPhone || !update?.newer || !update.latest || update.latest === dismissed) return null
+  const install = update.canInstall
+  const downloading = install && progress?.state === 'downloading'
+  const ready = install && progress?.state === 'ready'
+  const failed = install && progress?.state === 'error'
+  let label = `Update ${update.latest}`
+  let title = `Hearth ${update.latest} is available`
+  let onClick = (): void => {
+    if (update.url) window.open(update.url)
+  }
+  if (install) {
+    if (downloading) {
+      label = `Downloading ${progress?.percent ?? 0}%`
+      title = `Downloading Hearth ${update.latest}`
+      onClick = () => {}
+    } else if (ready) {
+      label = 'Restart to update'
+      title = `Restart Hearth to finish installing ${update.latest}`
+      onClick = () => void installUpdate()
+    } else if (failed) {
+      title = `Update failed: ${progress?.error ?? 'unknown error'} – click to open the release page`
+    } else {
+      title = `Download and install Hearth ${update.latest}`
+      onClick = () => void downloadUpdate()
+    }
+  }
+  const dismissible = !downloading && !ready
   return (
     <div className="no-drag">
-      <button className="update-pill" title={`Hearth ${update.latest} is available`} onClick={() => update.url && window.open(update.url)}>
+      <button className="update-pill" title={title} disabled={downloading} onClick={onClick}>
         <ArrowUpCircle size={13} />
-        <span>Update {update.latest}</span>
-        <span
-          className="update-pill-x"
-          title="Dismiss"
-          onClick={(e) => {
-            e.stopPropagation()
-            dismissUpdate()
-          }}
-        >
-          <X size={11} />
-        </span>
+        <span>{label}</span>
+        {dismissible && (
+          <span
+            className="update-pill-x"
+            title="Dismiss"
+            onClick={(e) => {
+              e.stopPropagation()
+              dismissUpdate()
+            }}
+          >
+            <X size={11} />
+          </span>
+        )}
       </button>
     </div>
   )

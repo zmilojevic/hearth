@@ -115,6 +115,11 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (isPhone) return
+    return window.desktop.onUpdateProgress((p) => useStore.setState({ updateProgress: p }))
+  }, [])
+
   useEffect(
     () =>
       window.desktop.onTrayNewChat(() => {

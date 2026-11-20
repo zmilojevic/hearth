@@ -21,7 +21,7 @@ import { launchTools, openInEditor, openTerminal } from './launch'
 import { RemoteManager } from './remote'
 import { MobileServer } from './mobile'
 import { PtyManager } from './pty'
-import { checkUpdate } from './updates'
+import { checkUpdate, downloadUpdate, installUpdate } from './updates'
 import { authStatus, refreshAccountInfo } from './auth'
 import { accountConfigDir, activeAccount, addAccount, DEFAULT_ACCOUNT, ensureAccountDir, listAccounts, onAccountsChanged, removeAccount, resolveAccount, setActiveAccount } from './accounts'
 import { claudeBinary } from './claudeBin'
@@ -378,6 +378,11 @@ handle('app:openInEditor', (_ctx, path: string, line?: number, editorId?: string
 handle('app:openTerminal', (_ctx, dir: string, terminalId?: string) => openTerminal(dir, terminalId))
 // ---- IPC: updates and Claude login
 handle('app:checkUpdate', () => checkUpdate())
+handle('app:downloadUpdate', () => downloadUpdate((p) => emit('update:progress', p)))
+handle('app:installUpdate', () => {
+  quitting = true // otherwise the window close handler would only hide to the tray
+  installUpdate()
+})
 handle('auth:status', (_ctx, account?: string) => authStatus(account))
 // ---- IPC: Claude accounts (accounts.ts)
 handle('accounts:list', () => listAccounts())

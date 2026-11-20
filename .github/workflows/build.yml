@@ -92,6 +92,8 @@ jobs:
             dist/*.dmg
             dist/*.zip
             dist/*.exe
+            dist/latest*.yml
+            dist/*.blockmap
 
   android:
     runs-on: ubuntu-latest

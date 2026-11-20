@@ -108,6 +108,8 @@ export default function SettingsPopover() {
   const updateCheck = useStore((s) => s.updateCheck)
   const setUpdateCheck = useStore((s) => s.setUpdateCheck)
   const update = useStore((s) => s.update)
+  const updateProgress = useStore((s) => s.updateProgress)
+  const installUpdate = useStore((s) => s.installUpdate)
   const theme = useStore((s) => s.theme)
   const setTheme = useStore((s) => s.setTheme)
   const editor = useStore((s) => s.editor)
@@ -262,7 +264,11 @@ export default function SettingsPopover() {
                 {update.newer && update.latest && (
                   <>
                     {' · '}
-                    <a onClick={() => update.url && window.open(update.url)}>{update.latest} available</a>
+                    {updateProgress?.state === 'ready' && update.canInstall ? (
+                      <a onClick={() => void installUpdate()}>{update.latest} ready – restart</a>
+                    ) : (
+                      <a onClick={() => update.url && window.open(update.url)}>{update.latest} available</a>
+                    )}
                   </>
                 )}
               </span>}

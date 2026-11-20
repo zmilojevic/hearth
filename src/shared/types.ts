@@ -436,6 +436,10 @@ export interface DesktopApi {
   usageAll(): Promise<Record<string, PlanUsage | null>>
   usageHistory(): Promise<UsageHistory>
   checkUpdate(): Promise<UpdateInfo>
+  /** Download the update found by checkUpdate (only when `canInstall`); progress arrives via onUpdateProgress. */
+  downloadUpdate(): Promise<void>
+  /** Quit and install the downloaded update, then relaunch. */
+  installUpdate(): Promise<void>
   /** Login state of a Claude account (default: the active one). */
   authStatus(account?: string): Promise<AuthStatus>
   /** Starts `claude auth login` for an account (default: the active one) in a pty (data/exit via the pty events); resolves with its pty id. */
@@ -481,6 +485,7 @@ export interface DesktopApi {
   onNotificationClick(cb: (e: { chatId: string }) => void): () => void
   /** Tray menu "New chat". */
   onTrayNewChat(cb: () => void): () => void
+  onUpdateProgress(cb: (p: UpdateProgress) => void): () => void
   // ---- @file mentions / plan mode
   /** File/folder suggestions for an `@` mention from the CLI's file index (relative paths, folders end with '/'). */
   fileSuggestions(chatId: string, query: string): Promise<string[]>
@@ -555,6 +560,14 @@ export interface UpdateInfo {
   latest?: string
   url?: string
   newer: boolean
+  /** The app can download and install the update itself (packaged Windows NSIS / Linux AppImage). */
+  canInstall: boolean
+  error?: string
+}
+
+export interface UpdateProgress {
+  state: 'downloading' | 'ready' | 'error'
+  percent?: number
   error?: string
 }
 
