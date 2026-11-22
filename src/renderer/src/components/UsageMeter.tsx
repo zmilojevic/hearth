@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PlanUsage, UsagePace, UsageRow } from '../../../shared/types'
 import { useStore } from '../store'
-import { dayStartMs } from '../../../shared/usageDay'
-import { paceBudget, paceText, pctText, relativeTime } from '../util'
+import { paceBudget, paceText, relativeTime } from '../util'
 
 function until(iso: string | null, now: number): string {
   if (!iso) return ''
@@ -122,8 +121,6 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
   const reset = until(main.resetsAt, now)
   const pace = codex ? undefined : paceMap[activeAccount]
   const pb = pace ? paceBudget(pace, now) : null
-  const sinceD = pace ? new Date(pace.since) : null
-  const late = pace && sinceD && pace.since > dayStartMs(now) + 5 * 60_000
 
   return (
     <div className="ctx-meter-wrap" onMouseEnter={show} onMouseLeave={hide}>
@@ -150,7 +147,7 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
             <span>{codex ? 'Codex usage' : 'Plan usage'}</span>
             <span className="muted">{sub}</span>
           </div>
-          {pace && pb && sinceD && (
+          {pace && pb && (
             <div className="usage-group">
               <div className="usage-group-title">Today</div>
               <div className="usage-row">
@@ -161,15 +158,6 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
                   </span>
                 </div>
                 <PaceBar ratio={pb.ratio} used={pace.estimate?.used ?? pace.usedToday} big />
-                <div className="usage-reset muted">
-                  {pace.estimate ? '~' : ''}{pctText(pace.estimate?.used ?? pace.usedToday)}% of {pctText(pb.budget)}% weekly limit · {pb.days.toFixed(1)} days left
-                  {late && ` · tracked since ${String(sinceD.getHours()).padStart(2, '0')}:${String(sinceD.getMinutes()).padStart(2, '0')}`}
-                </div>
-                <div className="usage-reset muted">
-                  {pace.estimate
-                    ? `Estimated from tokens between server updates (calibrated on ${Math.round(pace.estimate.points)} points, by ${pace.estimate.basis === 'ticks' ? 'ticks' : pace.estimate.basis === 'rough' ? "rough: this week's transcripts, all accounts' unattributed usage counted as this one" : "this week's total"})`
-                    : 'Server reports whole percents · estimate calibrating'}
-                </div>
               </div>
             </div>
           )}
