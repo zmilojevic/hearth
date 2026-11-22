@@ -2,6 +2,8 @@
 export const DAY_START_HOUR = 7
 export const DAY_END_HOUR = 4
 export const ACTIVE_HOURS = 21
+/** Daily budget as % of the weekly limit; tune here. */
+export const DAILY_BUDGET_PERCENT = 15
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 
@@ -15,6 +17,12 @@ export function usageDay(ms: number): string {
 export function dayStartMs(ms: number): number {
   const [y, m, d] = usageDay(ms).split('-').map(Number)
   return new Date(y, m - 1, d, DAY_START_HOUR, 0, 0, 0).getTime()
+}
+
+/** 04:00 local that starts the usage day containing `ms` (use before 07:00 still counts toward that day). */
+export function dayBoundaryMs(ms: number): number {
+  const [y, m, d] = usageDay(ms).split('-').map(Number)
+  return new Date(y, m - 1, d, DAY_END_HOUR, 0, 0, 0).getTime()
 }
 
 /** Hours of [fromMs, toMs] inside the windows [D 07:00, D+1 04:00] over all dates D. */

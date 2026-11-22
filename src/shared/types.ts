@@ -276,6 +276,20 @@ export interface UsagePace {
   lastPercent: number
   usedToday: number
   resetsAt: string | null
+  /** Token-based estimate between the server's whole-percent ticks; only when calibrated. */
+  estimate?: UsagePaceEstimate
+}
+export interface UsagePaceEstimate {
+  /** Estimated use today in percent points of the week (usedToday + frac + before). */
+  used: number
+  /** Estimated part of a percent consumed since the last server tick (0..0.99). */
+  frac: number
+  /** Estimated use today before tracking started. */
+  before: number
+  costPerPercent: number
+  basis: 'ticks' | 'window' | 'rough'
+  /** Percent points the calibration rests on. */
+  points: number
 }
 export interface UsageHistory {
   rows: UsageDayRow[]

@@ -10,6 +10,7 @@ import { join } from 'node:path'
 const MAX_AGE_MS = 180 * 24 * 3600 * 1000
 const known = new Map<string, string>()
 let loaded = false
+let firstT: number | null = null
 let pending: string[] = []
 let flushing = false
 
@@ -32,6 +33,7 @@ function load(): void {
           continue
         }
         known.set(o.m, o.a)
+        if (typeof o.t === 'number' && (firstT === null || o.t < firstT)) firstT = o.t
         keep.push(line)
       } catch {
         dropped = true
@@ -66,6 +68,7 @@ export function noteAssistant(account: string, message: unknown): void {
     load()
     if (known.has(id)) return
     known.set(id, account)
+    if (firstT === null) firstT = Date.now()
     pending.push(JSON.stringify({ m: id, a: account, t: Date.now() }) + '\n')
     void flush()
   } catch {
@@ -79,5 +82,15 @@ export function accountOf(id: string): string | undefined {
     return known.get(id)
   } catch {
     return undefined
+  }
+}
+
+/** Time (ms) of the earliest recorded attribution, or null when nothing was recorded yet. */
+export function firstAttributionMs(): number | null {
+  try {
+    load()
+    return firstT
+  } catch {
+    return null
   }
 }

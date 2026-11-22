@@ -134,7 +134,7 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
             <span className="ctx-meter-text">
               Today {paceText(pace, pb)}
             </span>
-            <PaceBar ratio={pb.ratio} used={pace.usedToday} />
+            <PaceBar ratio={pb.ratio} used={pace.estimate?.used ?? pace.usedToday} />
           </>
         ) : (
           <>
@@ -160,10 +160,15 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
                     {paceText(pace, pb)}
                   </span>
                 </div>
-                <PaceBar ratio={pb.ratio} used={pace.usedToday} big />
+                <PaceBar ratio={pb.ratio} used={pace.estimate?.used ?? pace.usedToday} big />
                 <div className="usage-reset muted">
-                  {pctText(pace.usedToday)}% of {pctText(pb.budget)}% weekly limit · {pb.days.toFixed(1)} days left
+                  {pace.estimate ? '~' : ''}{pctText(pace.estimate?.used ?? pace.usedToday)}% of {pctText(pb.budget)}% weekly limit · {pb.days.toFixed(1)} days left
                   {late && ` · tracked since ${String(sinceD.getHours()).padStart(2, '0')}:${String(sinceD.getMinutes()).padStart(2, '0')}`}
+                </div>
+                <div className="usage-reset muted">
+                  {pace.estimate
+                    ? `Estimated from tokens between server updates (calibrated on ${Math.round(pace.estimate.points)} points, by ${pace.estimate.basis === 'ticks' ? 'ticks' : pace.estimate.basis === 'rough' ? "rough: this week's transcripts, all accounts' unattributed usage counted as this one" : "this week's total"})`
+                    : 'Server reports whole percents · estimate calibrating'}
                 </div>
               </div>
             </div>
