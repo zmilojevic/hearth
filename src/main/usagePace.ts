@@ -187,7 +187,15 @@ export function estimateFor(s: UsagePace, tk: Tick[], costs: CostPoint[], cal: C
       ? Math.min(0.99, costBetween(costs, lastT, now) / cpp)
       : Math.min(0.99, Math.max(0, costBetween(costs, lastT, now) / cpp - (s.lastPercent - s.startPercent)))
   const boundary = dayBoundaryMs(s.since)
-  const before = s.since > boundary ? Math.min(s.startPercent, costBetween(costs, boundary, s.since) / cpp) : 0
+  let before = 0
+  if (s.since > boundary) {
+    const morn = costBetween(costs, boundary, s.since)
+    before = Math.min(s.startPercent, morn / cpp)
+    // Proportional cap: unattributed/other-account usage and calibration error can't make the morning exceed its share of the window's usage.
+    const winStart = (s.resetsAt ? Date.parse(s.resetsAt) : NaN) - 7 * 24 * 3600 * 1000
+    const win = Number.isFinite(winStart) ? costBetween(costs, winStart, s.since) : 0
+    if (win > 0) before = Math.min(before, (s.startPercent * morn) / win)
+  }
   return { used: s.usedToday + frac + before, frac, before, costPerPercent: cpp, basis: cal.basis, points: cal.points }
 }
 
