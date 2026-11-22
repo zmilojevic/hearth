@@ -257,11 +257,25 @@ export interface UsageDayRow {
   day: string
   cwd: string
   model: string
+  /** Account id that ran the turn; '' = unknown (no attribution). */
+  account: string
   input: number
   cacheWrite: number
   cacheRead: number
   output: number
   messages: number
+}
+/** Today's use of one account's weekly limit (see usagePace.ts). */
+export interface UsagePace {
+  account: string
+  /** Local date YYYY-MM-DD. */
+  day: string
+  /** ms of the first observation today. */
+  since: number
+  startPercent: number
+  lastPercent: number
+  usedToday: number
+  resetsAt: string | null
 }
 export interface UsageHistory {
   rows: UsageDayRow[]
@@ -435,6 +449,7 @@ export interface DesktopApi {
   /** Cached plan usage per Claude account id (null = nothing cached yet). */
   usageAll(): Promise<Record<string, PlanUsage | null>>
   usageHistory(): Promise<UsageHistory>
+  usagePace(): Promise<Record<string, UsagePace>>
   checkUpdate(): Promise<UpdateInfo>
   /** Download the update found by checkUpdate (only when `canInstall`); progress arrives via onUpdateProgress. */
   downloadUpdate(): Promise<void>

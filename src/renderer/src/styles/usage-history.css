@@ -47,13 +47,8 @@
 }
 .uh-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 22px;
-}
-@container (max-width: 640px) {
-  .uh-cols {
-    grid-template-columns: 1fr;
-  }
 }
 .uh-modal {
   container-type: inline-size;
@@ -187,4 +182,19 @@
 }
 .usage-pair > .ctx-meter-wrap {
   margin-left: -6px;
+}
+
+.uh-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.uh-pace-text {
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.uh-fill.over {
+  background: color-mix(in srgb, var(--accent-muted) 70%, hsl(15 40% 45%));
 }

@@ -35,6 +35,7 @@ export const INVOKES = {
   getUsage: 'usage:get',
   usageAll: 'usage:all',
   usageHistory: 'usage:history',
+  usagePace: 'usage:pace',
   checkUpdate: 'app:checkUpdate',
   downloadUpdate: 'app:downloadUpdate',
   installUpdate: 'app:installUpdate',

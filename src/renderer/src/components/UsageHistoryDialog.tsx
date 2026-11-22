@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw, X } from 'lucide-react'
 import { useStore } from '../store'
 import Dropdown from './Dropdown'
-import { modelLabel, projectName, projectRoot, relativeTime, shortPath } from '../util'
-import type { UsageDayRow, UsageHistory } from '@shared/types'
+import { modelLabel, paceBudget, paceText, pctText, projectName, projectRoot, relativeTime, shortPath } from '../util'
+import { dayStartMs, usageDay } from '@shared/usageDay'
+import type { AccountInfo, UsageDayRow, UsageHistory, UsagePace } from '@shared/types'
 
 const RANGES = [
   { value: 'today', label: 'Today', days: 1 },
@@ -14,6 +15,10 @@ const RANGES = [
 ]
 const TOP = 10
 const CAT_HUES = [18, 205, 145, 275, 45, 330, 95, 180]
+const CHART_MODES = [
+  { value: 'model', label: 'By model' },
+  { value: 'account', label: 'By account' },
+]
 const hue = (i: number): string => `hsl(${CAT_HUES[i % CAT_HUES.length]} 32% var(--chip-l))`
 
 interface Tot {
@@ -49,8 +54,8 @@ function dayKey(d: Date): string {
 }
 function lastDays(n: number): string[] {
   const out: string[] = []
-  const d = new Date()
-  d.setHours(12, 0, 0, 0)
+  const [y, m, dd] = usageDay(Date.now()).split('-').map(Number)
+  const d = new Date(y, m - 1, dd, 12, 0, 0, 0)
   d.setDate(d.getDate() - (n - 1))
   for (let i = 0; i < n; i++) {
     out.push(dayKey(d))
@@ -76,6 +81,53 @@ function fold(items: Item[]): Item[] {
   const tot = zero()
   for (const r of rest) add(tot, r.tot)
   return [...top, { key: '\0other', name: `Other (${rest.length})`, tip: rest.map((r) => r.name).join(', '), tot }]
+}
+
+const acctName = (a: AccountInfo): string => a.label || a.email || a.id
+
+function resetsIn(iso: string | null): string {
+  const ms = iso ? new Date(iso).getTime() - Date.now() : NaN
+  if (!isFinite(ms) || ms <= 0) return ''
+  const h = Math.floor(ms / 3_600_000)
+  return h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${h}h ${Math.floor((ms % 3_600_000) / 60_000)}m`
+}
+
+function PaceSection({ accounts, pace }: { accounts: AccountInfo[]; pace: Record<string, UsagePace> }) {
+  const list = accounts.filter((a) => pace[a.id])
+  if (!list.length) return null
+  const start = dayStartMs(Date.now())
+  return (
+    <section className="uh-section">
+      <h4>Daily pace</h4>
+      {list.map((a) => {
+        const p = pace[a.id]
+        const pb = paceBudget(p)
+        const { budget, days, ratio } = pb
+        const left = resetsIn(p.resetsAt)
+        const since = new Date(p.since)
+        const late = p.since > start + 5 * 60_000
+        const tip = [
+          late ? `Tracked since ${String(since.getHours()).padStart(2, '0')}:${String(since.getMinutes()).padStart(2, '0')} (earlier use today is not counted)` : '',
+          `Budget = (100 - ${pctText(p.startPercent)}) / ${days.toFixed(1)} days = ${pctText(budget)}% per day`,
+        ]
+          .filter(Boolean)
+          .join('\n')
+        return (
+          <div key={a.id} className="uh-row" title={tip}>
+            <div className="uh-row-head">
+              <span className="uh-name">{acctName(a)}</span>
+              <span className="uh-pace-text muted">
+                Today {paceText(p, pb)} of budget · {pctText(p.usedToday)}/{pctText(budget)}% of week · week {pctText(p.lastPercent)}% used{left ? ` · resets in ${left}` : ''}
+              </span>
+            </div>
+            <span className="uh-bar">
+              <span className={`uh-fill${ratio > 1 ? ' over' : ''}`} style={{ width: `${Math.min(100, Math.max(p.usedToday > 0 ? 1 : 0, ratio * 100))}%` }} />
+            </span>
+          </div>
+        )
+      })}
+    </section>
+  )
 }
 
 function Section({ title, items, grand }: { title: string; items: Item[]; grand: number }) {
@@ -112,6 +164,10 @@ export default function UsageHistoryDialog() {
   const close = useStore((s) => s.closeUsageHistory)
   const projectNames = useStore((s) => s.projectNames)
   const generalDir = useStore((s) => s.generalDir)
+  const accounts = useStore((s) => s.accounts.accounts)
+  const accountUsage = useStore((s) => s.accountUsage)
+  const [pace, setPace] = useState<Record<string, UsagePace>>({})
+  const [chartMode, setChartMode] = useState('model')
   const [range, setRange] = useState('30')
   const [data, setData] = useState<UsageHistory | null>(null)
   const [loading, setLoading] = useState(true)
@@ -135,6 +191,9 @@ export default function UsageHistoryDialog() {
     return () => clearInterval(t)
   }, [load])
   useEffect(() => {
+    void window.desktop.usagePace().then(setPace).catch(() => {})
+  }, [accountUsage])
+  useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape' && !document.querySelector('.dd-menu')) close()
     }
@@ -150,10 +209,12 @@ export default function UsageHistoryDialog() {
     return data.rows.filter((r) => r.day >= from)
   }, [data, days])
 
-  const { sum, projects, models, modelOrder } = useMemo(() => {
+  const { sum, projects, models, modelOrder, accts, acctOrder, acctNames } = useMemo(() => {
     const sum = zero()
     const byProj = new Map<string, Item>()
     const byModel = new Map<string, Item>()
+    const byAcct = new Map<string, Item>()
+    const acctNames = new Map<string, string>()
     for (const r of rows) {
       add(sum, { ...r })
       const root = r.cwd ? projectRoot(r.cwd) : ''
@@ -165,17 +226,33 @@ export default function UsageHistoryDialog() {
       let m = byModel.get(r.model)
       if (!m) byModel.set(r.model, (m = { key: r.model, name: modelLabel(r.model), tip: r.model, tot: zero() }))
       add(m.tot, { ...r })
+      const ai = accounts.find((a) => a.id === r.account)
+      let ac = byAcct.get(r.account)
+      if (!ac) {
+        const name = !r.account ? 'Unattributed' : ai ? acctName(ai) : 'Removed account'
+        const tip = !r.account ? 'Before per-account tracking started' : r.account
+        byAcct.set(r.account, (ac = { key: r.account, name, tip, tot: zero() }))
+        acctNames.set(r.account, name)
+      }
+      add(ac.tot, { ...r })
     }
     const models = fold([...byModel.values()])
     return {
       sum,
       projects: fold([...byProj.values()]),
       models,
+      accts: fold([...byAcct.values()]),
+      acctOrder: [...byAcct.values()].sort((a, b) => total(b.tot) - total(a.tot)).map((m) => m.key),
+      acctNames,
       modelOrder: [...byModel.values()].sort((a, b) => total(b.tot) - total(a.tot)).map((m) => m.key),
     }
-  }, [rows, projectNames, generalDir, home])
+  }, [rows, projectNames, generalDir, home, accounts])
 
   const grand = total(sum)
+  const showAccounts = accounts.length >= 2 || (data?.rows.some((r) => r.account && r.account !== 'default') ?? false)
+  const byAcct = chartMode === 'account' && showAccounts
+  const order = byAcct ? acctOrder : modelOrder
+  const nameOf = (k: string): string => (byAcct ? (acctNames.get(k) ?? k) : modelLabel(k))
   const chartDays = range === 'today' ? [] : lastDays(range === 'all' ? 90 : days)
   const chart = useMemo(() => {
     if (!chartDays.length) return null
@@ -183,7 +260,8 @@ export default function UsageHistoryDialog() {
     for (const r of rows) {
       let m = perDay.get(r.day)
       if (!m) perDay.set(r.day, (m = new Map()))
-      m.set(r.model, (m.get(r.model) ?? 0) + r.input + r.cacheWrite + r.output)
+      const k = byAcct ? r.account : r.model
+      m.set(k, (m.get(k) ?? 0) + r.input + r.cacheWrite + r.output)
     }
     let max = 0
     const cols = chartDays.map((d) => {
@@ -195,7 +273,7 @@ export default function UsageHistoryDialog() {
     })
     return { cols, max }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, range])
+  }, [rows, range, byAcct])
 
   const upd = data ? (relativeTime(data.scannedAt) === 'now' ? 'just now' : `${relativeTime(data.scannedAt)} ago`) : ''
 
@@ -218,6 +296,7 @@ export default function UsageHistoryDialog() {
           </span>
         </div>
         <div className="uh-body">
+          <PaceSection accounts={accounts} pace={pace} />
           <div className="uh-summary">
             <div className="uh-total">
               {fmt(grand)} <span className="muted">tokens · cache reads excluded</span>
@@ -230,17 +309,21 @@ export default function UsageHistoryDialog() {
           <div className="uh-cols">
             <Section title="By project" items={projects} grand={grand} />
             <Section title="By model" items={models} grand={grand} />
+            {showAccounts && <Section title="By account" items={accts} grand={grand} />}
           </div>
           {chart && (
             <section className="uh-section">
-              <h4>Daily{range === 'all' ? ' (last 90 days)' : ''}</h4>
+              <div className="uh-chart-head">
+                <h4>Daily{range === 'all' ? ' (last 90 days)' : ''}</h4>
+                {showAccounts && <Dropdown className="theme-dd" value={chartMode} options={CHART_MODES} onChange={setChartMode} title="Stack by" />}
+              </div>
               <div className="uh-chart">
                 {chart.cols.map((c) => {
-                  const tip = [c.day, ...modelOrder.filter((k) => c.m.get(k)).map((k) => `${modelLabel(k)}: ${fmt(c.m.get(k)!)}`), `Total: ${fmt(c.t)}`].join('\n')
+                  const tip = [c.day, ...order.filter((k) => c.m.get(k)).map((k) => `${nameOf(k)}: ${fmt(c.m.get(k)!)}`), `Total: ${fmt(c.t)}`].join('\n')
                   return (
                     <div key={c.day} className="uh-col" title={tip}>
                       <div className="uh-stack" style={{ height: `${chart.max ? (c.t / chart.max) * 100 : 0}%` }}>
-                        {modelOrder.map((k, i) =>
+                        {order.map((k, i) =>
                           c.m.get(k) ? <span key={k} className="uh-seg" style={{ flexGrow: c.m.get(k), background: hue(i) }} /> : null,
                         )}
                       </div>
@@ -253,13 +336,13 @@ export default function UsageHistoryDialog() {
                 <span>{chart.cols[chart.cols.length - 1].day}</span>
               </div>
               <div className="uh-legend small">
-                {modelOrder
+                {order
                   .map((k, i) => ({ k, i }))
                   .filter(({ k }) => chart.cols.some((c) => c.m.get(k)))
                   .map(({ k, i }) => (
                     <span key={k} className="uh-leg">
                       <span className="uh-dot" style={{ background: hue(i) }} />
-                      {modelLabel(k)}
+                      {nameOf(k)}
                     </span>
                   ))}
               </div>

@@ -3,9 +3,12 @@ import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { accountOf } from './usageAccounts'
 import type { UsageDayRow, UsageHistory } from '../shared/types'
+import { usageDay } from '../shared/usageDay'
 
 interface Rec {
+  id: string
   day: string
   cwd: string
   model: string
@@ -40,11 +43,9 @@ async function listJsonl(dir: string, out: string[]): Promise<void> {
   }
 }
 
-function localDay(ts: string): string | null {
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return null
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+function dayOf(ts: string): string | null {
+  const t = Date.parse(ts)
+  return isNaN(t) ? null : usageDay(t)
 }
 
 function parseLine(line: string, into: Map<string, Rec>): void {
@@ -58,10 +59,11 @@ function parseLine(line: string, into: Map<string, Rec>): void {
   const m = o?.message
   const u = m?.usage
   if (o?.type !== 'assistant' || !u || typeof m.id !== 'string' || !m.model || m.model === '<synthetic>') return
-  const day = typeof o.timestamp === 'string' ? localDay(o.timestamp) : null
+  const day = typeof o.timestamp === 'string' ? dayOf(o.timestamp) : null
   if (!day) return
   const n = (v: unknown): number => (typeof v === 'number' && isFinite(v) ? v : 0)
   into.set(m.id, {
+    id: m.id,
     day,
     cwd: typeof o.cwd === 'string' ? o.cwd : '',
     model: String(m.model),
@@ -114,9 +116,10 @@ async function scan(): Promise<UsageHistory> {
   for (const c of cache.values()) for (const [id, r] of c.records) if (!byId.has(id)) byId.set(id, r)
   const agg = new Map<string, UsageDayRow>()
   for (const r of byId.values()) {
-    const key = `${r.day}\0${r.cwd}\0${r.model}`
+    const account = accountOf(r.id) ?? ''
+    const key = `${r.day}\0${r.cwd}\0${r.model}\0${account}`
     let row = agg.get(key)
-    if (!row) agg.set(key, (row = { day: r.day, cwd: r.cwd, model: r.model, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, messages: 0 }))
+    if (!row) agg.set(key, (row = { day: r.day, cwd: r.cwd, model: r.model, account, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, messages: 0 }))
     row.input += r.input
     row.cacheWrite += r.cacheWrite
     row.cacheRead += r.cacheRead

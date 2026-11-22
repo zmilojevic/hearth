@@ -15,6 +15,8 @@ import { readSubagentTranscript } from './subagents'
 import { readSessionMeta, sessionCwd, rewindPoint } from './sessionMeta'
 import { UsageService } from './usage'
 import { usageHistory } from './usageHistory'
+import { noteAssistant } from './usageAccounts'
+import { observe as observePace, usagePace } from './usagePace'
 import { searchTranscripts } from './search'
 import { gitChanges, createWorktree, removeWorktree, gitSetStaged, gitDiscardFile, gitDiscardHunk } from './git'
 import { launchTools, openInEditor, openTerminal } from './launch'
@@ -83,7 +85,13 @@ const runnerEmit = (channel: string, payload: unknown): void => {
   emit(channel, payload)
   if (channel !== 'agent:event') return
   const p = payload as { chatId?: string; message?: { type?: string } }
-  if (p.message?.type !== 'rate_limit_event' || !p.chatId) return
+  if (!p.chatId) return
+  if (p.message?.type === 'assistant') {
+    const r = runners.getClaude(p.chatId)
+    if (r) noteAssistant(r.account, p.message)
+    return
+  }
+  if (p.message?.type !== 'rate_limit_event') return
   const r = runners.getClaude(p.chatId)
   if (r) usageService?.noteRateLimit(r.account, p.message)
 }
@@ -94,8 +102,15 @@ mobileServer = new MobileServer(emit, log)
 usageService = new UsageService(
   runners,
   log,
-  (u) => emit('usage:changed', u),
-  () => emit('usage:allChanged', usageService!.all()),
+  (u) => {
+    emit('usage:changed', u)
+    observePace(usageService!.all())
+  },
+  () => {
+    const all = usageService!.all()
+    observePace(all)
+    emit('usage:allChanged', all)
+  },
 )
 
 function createWindow(): void {
@@ -315,6 +330,7 @@ handle('mobile:revoke', (_ctx, id: string) => mobileServer!.revoke(id))
 handle('usage:get', (_ctx, force?: boolean) => usageService!.get(!!force))
 handle('usage:all', () => usageService!.all())
 handle('usage:history', () => usageHistory())
+handle('usage:pace', () => usagePace())
 
 // ---- IPC: desktop notifications -------------------------------------------
 
