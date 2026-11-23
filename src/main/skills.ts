@@ -74,9 +74,30 @@ async function scan(dir: string, scope: SkillInfo['scope']): Promise<SkillInfo[]
   return res.sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/** `skillOverrides` merged from user then project settings (local files win); missing/invalid files are ignored. */
+async function skillOverrides(cwd: string): Promise<Record<string, string>> {
+  const root = rootOf(cwd)
+  const files = [join(configDir(), 'settings.json'), join(configDir(), 'settings.local.json')]
+  for (const d of [root, cwd].filter((d, i, a) => a.indexOf(d) === i)) {
+    files.push(join(d, '.claude', 'settings.json'), join(d, '.claude', 'settings.local.json'))
+  }
+  const out: Record<string, string> = {}
+  for (const f of files) {
+    try {
+      const o = JSON.parse(await readFile(f, 'utf8'))?.skillOverrides
+      if (!o || typeof o !== 'object' || Array.isArray(o)) continue
+      for (const [k, v] of Object.entries(o)) if (typeof v === 'string') out[k] = v
+    } catch {
+      /* missing or invalid: ignore */
+    }
+  }
+  return out
+}
+
 export async function listSkills(cwd: string): Promise<SkillInfo[]> {
   try {
     if (typeof cwd !== 'string' || !cwd) return []
+    const off = await skillOverrides(cwd)
     const dirs = [cwd, rootOf(cwd)].filter((d, i, a) => a.indexOf(d) === i)
     const seen = new Set<string>()
     const project: SkillInfo[] = []
@@ -88,7 +109,7 @@ export async function listSkills(cwd: string): Promise<SkillInfo[]> {
       }
     }
     project.sort((a, b) => a.name.localeCompare(b.name))
-    return [...project, ...(await scan(join(configDir(), 'skills'), 'user'))]
+    return [...project, ...(await scan(join(configDir(), 'skills'), 'user'))].filter((s) => off[s.name] !== 'off')
   } catch {
     return []
   }
