@@ -131,7 +131,7 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
             <span className="ctx-meter-text">
               Today {paceText(pace, pb)}
             </span>
-            <PaceBar ratio={pb.ratio} used={pace.estimate?.used ?? pace.usedToday} />
+            <PaceBar ratio={pb.ratio} used={pace.usedToday} />
           </>
         ) : (
           <>
@@ -157,7 +157,7 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
                     {paceText(pace, pb)}
                   </span>
                 </div>
-                <PaceBar ratio={pb.ratio} used={pace.estimate?.used ?? pace.usedToday} big />
+                <PaceBar ratio={pb.ratio} used={pace.usedToday} big />
               </div>
             </div>
           )}

@@ -2,8 +2,6 @@
 export const DAY_START_HOUR = 7
 export const DAY_END_HOUR = 4
 export const ACTIVE_HOURS = 21
-/** Daily budget as % of the weekly limit; tune here. */
-export const DAILY_BUDGET_PERCENT = 15
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 

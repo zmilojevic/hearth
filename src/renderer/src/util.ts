@@ -1,5 +1,5 @@
 import type { UsagePace } from '../../shared/types'
-import { ACTIVE_HOURS, DAILY_BUDGET_PERCENT, activeHours, dayStartMs } from '../../shared/usageDay'
+import { ACTIVE_HOURS, activeHours, dayStartMs } from '../../shared/usageDay'
 export const isWin = typeof window !== 'undefined' && window.desktop?.platform === 'win32'
 /** True in the phone web UI (window.desktop is the WebSocket shim). */
 export const isPhone = typeof window !== 'undefined' && window.desktop?.client === 'mobile'
@@ -180,7 +180,7 @@ export function pctText(n: number): string {
 
 /** Share of today's budget used: "43%", "128%"; "100%+" when there is no budget left. */
 export function paceText(p: UsagePace, pb: { budget: number; ratio: number }): string {
-  if (pb.budget <= 0) return (p.estimate?.used ?? p.usedToday) > 0 ? '100%+' : '0%'
+  if (pb.budget <= 0) return p.usedToday > 0 ? '100%+' : '0%'
   return `${Math.round(pb.ratio * 100)}%`
 }
 
@@ -188,9 +188,7 @@ export function paceText(p: UsagePace, pb: { budget: number; ratio: number }): s
 export function paceBudget(p: UsagePace, now = Date.now()): { budget: number; days: number; ratio: number } {
   const rs = p.resetsAt ? new Date(p.resetsAt).getTime() : NaN
   const days = isFinite(rs) ? Math.max(1, activeHours(dayStartMs(now), rs) / ACTIVE_HOURS) : 7
-  const e = p.estimate
-  const budget = Math.min(DAILY_BUDGET_PERCENT, Math.max(0, 100 - (e ? p.startPercent - e.before : p.startPercent)))
-  const used = e?.used ?? p.usedToday
-  const ratio = budget > 0 ? used / budget : used > 0 ? 2 : 0
+  const budget = Math.max(0, 100 - p.startPercent) / days
+  const ratio = budget > 0 ? p.usedToday / budget : p.usedToday > 0 ? 2 : 0
   return { budget, days, ratio }
 }

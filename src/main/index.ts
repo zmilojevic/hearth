@@ -330,7 +330,7 @@ handle('mobile:revoke', (_ctx, id: string) => mobileServer!.revoke(id))
 handle('usage:get', (_ctx, force?: boolean) => usageService!.get(!!force))
 handle('usage:all', () => usageService!.all())
 handle('usage:history', () => usageHistory())
-handle('usage:pace', async () => usagePace())
+handle('usage:pace', () => usagePace())
 
 // ---- IPC: desktop notifications -------------------------------------------
 

@@ -3,7 +3,7 @@ import { RefreshCw, X } from 'lucide-react'
 import { useStore } from '../store'
 import Dropdown from './Dropdown'
 import { modelLabel, paceBudget, paceText, pctText, projectName, projectRoot, relativeTime, shortPath } from '../util'
-import { DAILY_BUDGET_PERCENT, dayStartMs, usageDay } from '@shared/usageDay'
+import { dayStartMs, usageDay } from '@shared/usageDay'
 import type { AccountInfo, UsageDayRow, UsageHistory, UsagePace } from '@shared/types'
 
 const RANGES = [
@@ -108,7 +108,7 @@ function PaceSection({ accounts, pace }: { accounts: AccountInfo[]; pace: Record
         const late = p.since > start + 5 * 60_000
         const tip = [
           late ? `Tracked since ${String(since.getHours()).padStart(2, '0')}:${String(since.getMinutes()).padStart(2, '0')} (earlier use today is not counted)` : '',
-          `Budget = ${DAILY_BUDGET_PERCENT}% of the weekly limit per day (less when less is left)`,
+          'Budget = what was left of the weekly limit at the start of the day, spread over the usage days until it resets',
         ]
           .filter(Boolean)
           .join('\n')
@@ -117,11 +117,11 @@ function PaceSection({ accounts, pace }: { accounts: AccountInfo[]; pace: Record
             <div className="uh-row-head">
               <span className="uh-name">{acctName(a)}</span>
               <span className="uh-pace-text muted">
-                Today {paceText(p, pb)} of budget · {p.estimate ? '~' : ''}{pctText(p.estimate?.used ?? p.usedToday)}/{pctText(budget)}% of week · week {p.estimate ? '~' : ''}{pctText(p.lastPercent + (p.estimate?.frac ?? 0))}% used{left ? ` · resets in ${left}` : ''}
+                Today {paceText(p, pb)} of budget · {pctText(p.usedToday)}/{pctText(budget)}% of week · week {pctText(p.lastPercent)}% used{left ? ` · resets in ${left}` : ''}
               </span>
             </div>
             <span className="uh-bar">
-              <span className={`uh-fill${ratio > 1 ? ' over' : ''}`} style={{ width: `${Math.min(100, Math.max((p.estimate?.used ?? p.usedToday) > 0 ? 1 : 0, ratio * 100))}%` }} />
+              <span className={`uh-fill${ratio > 1 ? ' over' : ''}`} style={{ width: `${Math.min(100, Math.max(p.usedToday > 0 ? 1 : 0, ratio * 100))}%` }} />
             </span>
           </div>
         )
