@@ -119,7 +119,8 @@ export default function UsageMeter({ codex = false, label = false }: { codex?: b
   }
   const sub = usage.subscription ? usage.subscription.charAt(0).toUpperCase() + usage.subscription.slice(1) : ''
   const reset = until(main.resetsAt, now)
-  const pace = codex ? undefined : paceMap[activeAccount]
+  const hasSession = usage.rows.some((r) => r.group === 'session' || r.kind === 'session')
+  const pace = codex || hasSession ? undefined : paceMap[activeAccount]
   const pb = pace ? paceBudget(pace, now) : null
 
   return (

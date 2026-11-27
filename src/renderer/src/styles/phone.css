@@ -196,3 +196,45 @@ html[data-client='mobile'],
   box-shadow: var(--shadow);
   pointer-events: none;
 }
+
+/* ---- pull-to-refresh on the list screen (mobile/pullToRefresh.ts sets --ptr / data-ptr on the sidebar) ---- */
+[data-client='mobile'] .sidebar { position: relative; }
+[data-client='mobile'] .ptr-indicator {
+  position: absolute;
+  top: var(--ptr-top, 0px);
+  left: 50%;
+  z-index: 5;
+  width: 34px;
+  height: 34px;
+  margin-left: -17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(var(--ptr, 0px) - 40px));
+}
+[data-client='mobile'] .ptr-indicator svg { transform: rotate(calc(var(--ptr-p, 0) * 270deg)); }
+[data-client='mobile'] .sidebar[data-ptr] .ptr-indicator { opacity: calc(var(--ptr-p, 0)); }
+[data-client='mobile'] .sidebar[data-ptr='ready'] .ptr-indicator,
+[data-client='mobile'] .sidebar[data-ptr='spin'] .ptr-indicator {
+  color: var(--accent);
+  border-color: var(--accent-muted);
+}
+[data-client='mobile'] .sidebar[data-ptr='spin'] .ptr-indicator { opacity: 1; }
+[data-client='mobile'] .sidebar[data-ptr='spin'] .ptr-indicator svg { animation: ptr-spin 0.8s linear infinite; }
+[data-client='mobile'] .sidebar[data-ptr] .sidebar-scroll { transform: translateY(calc(var(--ptr, 0px) * 0.4)); }
+[data-client='mobile'] .sidebar[data-ptr='back'] .ptr-indicator,
+[data-client='mobile'] .sidebar[data-ptr='back'] .sidebar-scroll,
+[data-client='mobile'] .sidebar[data-ptr='spin'] .ptr-indicator,
+[data-client='mobile'] .sidebar[data-ptr='spin'] .sidebar-scroll { transition: transform 180ms ease, opacity 180ms ease; }
+@keyframes ptr-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  [data-client='mobile'] .sidebar[data-ptr] .ptr-indicator,
+  [data-client='mobile'] .sidebar[data-ptr] .sidebar-scroll { transition: none; }
+  [data-client='mobile'] .sidebar[data-ptr='spin'] .ptr-indicator svg { animation-duration: 2s; }
+}

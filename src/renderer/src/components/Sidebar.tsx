@@ -1,6 +1,6 @@
 import type React from 'react'
 import { Fragment, useMemo, useRef, useState, useEffect } from 'react'
-import { Plus, Search, Clock, FolderGit2, FolderPlus, ChevronRight, Pencil, Trash2, GitFork, FolderOpen, Pin, PinOff, MessageSquarePlus, ChevronsDownUp, ChevronsUpDown, XCircle, FolderX, Flame, Snowflake, Check, MessageCircle, GitBranchPlus, Code, SquareTerminal, Smartphone, SlidersHorizontal, Workflow, Archive, ArchiveRestore, StickyNote, ArrowRightLeft } from 'lucide-react'
+import { Plus, Search, Clock, FolderGit2, FolderPlus, ChevronRight, Pencil, Trash2, GitFork, FolderOpen, Pin, PinOff, MessageSquarePlus, ChevronsDownUp, ChevronsUpDown, XCircle, FolderX, Flame, Snowflake, Check, MessageCircle, GitBranchPlus, Code, SquareTerminal, Smartphone, SlidersHorizontal, Workflow, Archive, ArchiveRestore, StickyNote, ArrowRightLeft, RotateCw } from 'lucide-react'
 import { openFolderInEditor, openTerminalAt } from '../openIn'
 import { useStore, KEEP_WARM_MAX_IDLE_MS, isGeneral, engineFor } from '../store'
 import { EFFORT_LEVELS, type MessageHit, type SessionSummary, type LiveChat, type ModelChoice, type Engine } from '@shared/types'
@@ -14,6 +14,7 @@ import type { SessionMeta } from '@shared/types'
 import { dotState, DOT_TITLE, type DotState } from './TopBar'
 import Dropdown from './Dropdown'
 import { useTooltip } from './Tooltip'
+import { usePullToRefresh } from '../mobile/pullToRefresh'
 
 // An expanded project with no listed chats collapses itself after this long.
 const EMPTY_COLLAPSE_MS = 5_000
@@ -618,6 +619,7 @@ export default function Sidebar() {
   // starting from the active chat's row (or the first entry).
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  usePullToRefresh(scrollRef, isPhone)
   const navigateRef = useRef(navigate)
   navigateRef.current = navigate
   useEffect(() => {
@@ -798,6 +800,7 @@ export default function Sidebar() {
         </label>
       </div>
 
+      {isPhone && <div className="ptr-indicator" aria-hidden><RotateCw size={16} /></div>}
       <div className="sidebar-scroll" ref={scrollRef} onKeyDown={onListKey}>
         {!loaded && <div className="muted pad">Loading sessions…</div>}
         {loaded && allGroups.length === 0 && shownHits.length === 0 && (
